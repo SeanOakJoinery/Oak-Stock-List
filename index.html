@@ -1,0 +1,1147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Oak Joinery — Stock List</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png" type="image/png">
+<link rel="apple-touch-icon" href="icon-180.png">
+<meta name="theme-color" content="#A8622E">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Oak Stock">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+<style>
+  :root{
+    --paper:#F6F1E7;
+    --card:#FFFDF9;
+    --ink:#2B241D;
+    --ink-soft:#6B5D4C;
+    --oak:#A8622E;
+    --oak-dark:#7C481F;
+    --line:#E3D8C4;
+    --line-strong:#CBBB9E;
+    --danger:#A3392E;
+    --danger-bg:#F6E4E0;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    background:var(--paper);
+    color:var(--ink);
+    padding:0 0 4rem;
+  }
+  .wrap{max-width:900px;margin:0 auto;padding:1.5rem 1.25rem;}
+
+  /* Letterhead */
+  .letterhead{
+    background:#EDE6D6;
+    border-radius:14px;
+    padding:1.1rem 1.4rem;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:1rem;
+    margin-bottom:1.5rem;
+    border:1px solid var(--line-strong);
+  }
+  .lh-left p{margin:0;font-size:12.5px;color:var(--ink-soft);line-height:1.5;}
+  .lh-left .name{font-size:15px;font-weight:600;color:var(--ink);margin-bottom:2px;}
+  .lh-logo{
+    font-size:19px;
+    letter-spacing:0.14em;
+    font-weight:600;
+    text-align:right;
+    line-height:1.3;
+    color:var(--oak-dark);
+    white-space:nowrap;
+  }
+  .lh-logo span{display:block;font-weight:300;color:var(--ink-soft);font-size:12px;letter-spacing:0.2em;}
+
+  h1{font-size:20px;font-weight:600;margin:0 0 0.2rem;}
+  .subtitle{font-size:13px;color:var(--ink-soft);margin:0 0 1.5rem;}
+
+  /* Add form */
+  .add-card{
+    background:var(--card);
+    border:1px solid var(--line);
+    border-radius:12px;
+    padding:1rem 1.1rem;
+    margin-bottom:1.75rem;
+  }
+  .add-card h2{font-size:13px;text-transform:none;font-weight:600;margin:0 0 0.85rem;color:var(--ink);}
+  .add-grid{
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:0.6rem 0.7rem;
+  }
+  .field{display:flex;flex-direction:column;gap:3px;}
+  .field.full{grid-column:1/-1;}
+  .field label{font-size:11.5px;color:var(--ink-soft);}
+  .field input, .field select{
+    font-size:14px;
+    padding:8px 9px;
+    border:1px solid var(--line-strong);
+    border-radius:7px;
+    background:#fff;
+    color:var(--ink);
+    font-family:inherit;
+  }
+  .field input:focus, .field select:focus{
+    outline:none;
+    border-color:var(--oak);
+    box-shadow:0 0 0 2px rgba(168,98,46,0.15);
+  }
+  .size-input{font-family:"SF Mono",Consolas,Menlo,monospace;}
+  .add-btn{
+    margin-top:0.9rem;
+    width:100%;
+    padding:10px;
+    background:var(--oak);
+    color:#fff;
+    border:none;
+    border-radius:8px;
+    font-size:14px;
+    font-weight:600;
+    cursor:pointer;
+  }
+  .add-btn:active{transform:scale(0.99);}
+  .add-btn:hover{background:var(--oak-dark);}
+  .error-msg{font-size:12px;color:var(--danger);margin-top:6px;display:none;}
+  .checkbox-field label{
+    flex-direction:row;
+    align-items:center;
+    gap:7px;
+    font-size:13px;
+    color:var(--ink);
+  }
+  .checkbox-field input[type=checkbox]{width:15px;height:15px;}
+
+  .stepper{
+    display:flex;
+    align-items:center;
+    gap:6px;
+    white-space:nowrap;
+  }
+  .stepper .step-label{font-size:11px;color:var(--ink-soft);min-width:14px;}
+  .stepper button{
+    width:24px;height:24px;
+    border:1px solid var(--line-strong);
+    background:#fff;
+    border-radius:6px;
+    font-size:15px;
+    line-height:1;
+    color:var(--oak-dark);
+    cursor:pointer;
+    padding:0;
+  }
+  .stepper button:hover{background:var(--line);}
+  .stepper button:active{transform:scale(0.95);}
+  .stepper .step-val{
+    min-width:26px;
+    text-align:center;
+    font-family:"SF Mono",Consolas,Menlo,monospace;
+    font-size:14px;
+  }
+  .item-qty{display:flex;flex-direction:column;gap:4px;}
+
+  /* Search / filter row */
+  .toolbar{
+    display:flex;
+    gap:0.6rem;
+    margin-bottom:1rem;
+    align-items:center;
+  }
+  .toolbar input[type=text]{
+    flex:1;
+    padding:8px 10px;
+    border:1px solid var(--line-strong);
+    border-radius:7px;
+    font-size:14px;
+    background:#fff;
+  }
+  .count-pill{
+    font-size:12px;
+    color:var(--ink-soft);
+    white-space:nowrap;
+  }
+  .save-btn{
+    padding:8px 16px;
+    background:var(--oak);
+    color:#fff;
+    border:none;
+    border-radius:7px;
+    font-size:13px;
+    font-weight:600;
+    cursor:pointer;
+    white-space:nowrap;
+  }
+  .save-btn:hover{background:var(--oak-dark);}
+  .save-btn:active{transform:scale(0.98);}
+  .saved-msg{
+    font-size:12px;
+    color:#3E7A4C;
+    font-weight:600;
+    text-align:right;
+    height:16px;
+    margin:-0.6rem 0 0.8rem;
+    opacity:0;
+    transition:opacity 0.2s;
+  }
+  .saved-msg.show{opacity:1;}
+
+  /* Category groups */
+  .category{margin-bottom:1.4rem;}
+  .category-head{
+    font-size:12.5px;
+    font-weight:600;
+    color:var(--oak-dark);
+    padding-bottom:5px;
+    margin-bottom:0.5rem;
+    border-bottom:1.5px solid var(--line-strong);
+    display:flex;
+    justify-content:space-between;
+  }
+  .category-head .cat-count{color:var(--ink-soft);font-weight:400;}
+
+  .item-row{
+    display:grid;
+    grid-template-columns:1fr auto auto auto;
+    gap:0.5rem;
+    align-items:start;
+    padding:9px 4px;
+    border-bottom:1px solid var(--line);
+  }
+  .item-row:last-child{border-bottom:none;}
+  .item-main{min-width:0;}
+  .item-desc{font-size:14px;font-weight:500;color:var(--ink);word-break:break-word;}
+  .item-desc.editable{cursor:pointer;border-bottom:1px dashed transparent;}
+  .item-desc.editable:hover{border-bottom-color:var(--oak);color:var(--oak-dark);}
+  .item-notes{font-size:12px;color:var(--ink-soft);margin-top:2px;}
+  .item-size{
+    font-family:"SF Mono",Consolas,Menlo,monospace;
+    font-size:13.5px;
+    color:var(--ink);
+    white-space:nowrap;
+    align-self:center;
+  }
+  .item-qty{
+    font-size:13px;
+    color:var(--ink-soft);
+    align-self:center;
+    white-space:nowrap;
+  }
+  .item-actions{display:flex;gap:6px;align-self:center;}
+  .icon-btn{
+    background:none;
+    border:none;
+    cursor:pointer;
+    color:var(--ink-soft);
+    font-size:13px;
+    padding:4px 6px;
+    border-radius:5px;
+  }
+  .icon-btn:hover{background:var(--line);color:var(--ink);}
+  .icon-btn.del:hover{background:var(--danger-bg);color:var(--danger);}
+
+  .empty{
+    text-align:center;
+    padding:2.5rem 1rem;
+    color:var(--ink-soft);
+    font-size:14px;
+  }
+
+  @media (max-width:520px){
+    .add-grid{grid-template-columns:1fr;}
+    .item-row{grid-template-columns:1fr;gap:2px;}
+    .item-size, .item-qty{white-space:normal;}
+    .item-actions{justify-content:flex-end;margin-top:4px;}
+  }
+
+  /* Cross-device sync */
+  .sync-bar{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:0.6rem;
+    margin:-0.9rem 0 1.2rem;
+    font-size:12px;
+  }
+  .sync-status{color:var(--ink-soft);}
+  .sync-link{
+    background:none;
+    border:none;
+    color:var(--oak-dark);
+    font-size:12px;
+    font-weight:600;
+    text-decoration:underline;
+    cursor:pointer;
+    padding:0;
+    white-space:nowrap;
+  }
+  .modal-overlay{
+    position:fixed;
+    inset:0;
+    background:rgba(43,36,29,0.45);
+    display:flex;
+    align-items:flex-start;
+    justify-content:center;
+    padding:5vh 1rem;
+    z-index:50;
+    overflow-y:auto;
+  }
+  .modal{
+    background:var(--card);
+    border-radius:14px;
+    padding:1.4rem 1.4rem 1.2rem;
+    max-width:440px;
+    width:100%;
+    border:1px solid var(--line-strong);
+  }
+  .modal h3{margin:0 0 0.5rem;font-size:16px;}
+  .modal-desc{font-size:13px;color:var(--ink-soft);margin:0 0 0.9rem;line-height:1.5;}
+  .modal-steps{margin:0 0 1.1rem;padding-left:1.2rem;font-size:12.5px;color:var(--ink);line-height:1.6;}
+  .modal-steps a{color:var(--oak-dark);}
+  .modal .field{margin-bottom:0.8rem;}
+  .modal-actions{display:flex;gap:0.6rem;margin-top:0.4rem;}
+  .modal-actions .add-btn{margin-top:0;}
+  .modal-close{
+    margin-top:0.9rem;
+    background:none;
+    border:none;
+    color:var(--ink-soft);
+    font-size:12.5px;
+    text-decoration:underline;
+    cursor:pointer;
+    padding:0;
+  }
+
+  /* Print / share actions */
+  .actions-bar{
+    display:flex;
+    gap:0.6rem;
+    margin:-0.6rem 0 1rem;
+    flex-wrap:wrap;
+  }
+  .ghost-btn{
+    padding:8px 14px;
+    background:#fff;
+    color:var(--oak-dark);
+    border:1px solid var(--oak);
+    border-radius:7px;
+    font-size:13px;
+    font-weight:600;
+    cursor:pointer;
+  }
+  .ghost-btn:hover{background:var(--line);}
+  .ghost-btn:active{transform:scale(0.98);}
+  .ghost-btn:disabled{opacity:0.6;cursor:default;}
+  .ios-install-hint{
+    font-size:12px;
+    color:var(--ink-soft);
+    align-self:center;
+  }
+
+  @media print{
+    body{background:#fff;padding:0;}
+    .add-card, .toolbar, .sync-bar, .actions-bar, .saved-msg, #recover-box, .modal-overlay, .item-actions, .stepper button{
+      display:none !important;
+    }
+    .wrap{max-width:100%;padding:0.4rem 0.8rem;}
+    .item-row{grid-template-columns:1fr auto auto;}
+    .category{break-inside:avoid;}
+    .letterhead{border:none;background:#fff;padding:0 0 0.6rem;}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="letterhead">
+    <div class="lh-left">
+      <p class="name">Oak Joinery</p>
+      <p>16 Bowling Avenue, Kramerville, Johannesburg<br>VAT No 4390291278 &nbsp;·&nbsp; Reg No 2022/532088/07</p>
+    </div>
+    <div class="lh-logo">OAK<span>JOINERY</span></div>
+  </div>
+
+  <h1>Stock list</h1>
+  <p class="subtitle">Cutting sizes and stock on hand, by job. Add new items as you measure up.</p>
+
+  <div class="add-card">
+    <h2>Add item</h2>
+    <div class="add-grid">
+      <div class="field full">
+        <label for="in-cat">Category / job</label>
+        <input type="text" id="in-cat" list="cat-list" placeholder="e.g. Wet bar, TV unit, Pedestal">
+        <datalist id="cat-list"></datalist>
+      </div>
+      <div class="field full">
+        <label for="in-desc">Item</label>
+        <input type="text" id="in-desc" placeholder="e.g. Back shelf, Cleats, TV panel chipboard">
+      </div>
+      <div class="field full">
+        <label for="in-size">Size</label>
+        <input type="text" id="in-size" class="size-input" placeholder="e.g. 2139 x 300">
+      </div>
+      <div class="field full checkbox-field">
+        <label><input type="checkbox" id="in-handed"> Split quantity by Right / Left handed</label>
+      </div>
+      <div class="field" id="qty-single-field">
+        <label for="in-qty">Qty</label>
+        <input type="number" id="in-qty" placeholder="0">
+      </div>
+      <div class="field" id="qty-r-field" style="display:none;">
+        <label for="in-qty-r">Qty — Right handed</label>
+        <input type="number" id="in-qty-r" placeholder="0">
+      </div>
+      <div class="field" id="qty-l-field" style="display:none;">
+        <label for="in-qty-l">Qty — Left handed</label>
+        <input type="number" id="in-qty-l" placeholder="0">
+      </div>
+      <div class="field full">
+        <label for="in-notes">Notes</label>
+        <input type="text" id="in-notes" placeholder="optional — material, unfinished, offcut...">
+      </div>
+    </div>
+    <button class="add-btn" id="add-btn">Add to stock list</button>
+    <p class="error-msg" id="error-msg">Enter at least an item name.</p>
+  </div>
+
+  <div class="toolbar">
+    <input type="text" id="search" placeholder="Search items...">
+    <span class="count-pill" id="count-pill"></span>
+    <button class="save-btn" id="save-btn">Save</button>
+  </div>
+  <div class="saved-msg" id="saved-msg">Saved ✓</div>
+
+  <div class="actions-bar">
+    <button class="ghost-btn" id="print-btn">Print</button>
+    <button class="ghost-btn" id="share-pdf-btn">Share PDF</button>
+    <button class="ghost-btn" id="install-btn" style="display:none;">Install app</button>
+    <span class="ios-install-hint" id="ios-install-hint" style="display:none;">To install: tap Share, then "Add to Home Screen"</span>
+  </div>
+
+  <div class="sync-bar">
+    <span class="sync-status" id="sync-status">Checking sync…</span>
+    <button class="sync-link" id="sync-settings-btn">Sync across devices</button>
+  </div>
+
+  <div id="recover-box" style="display:none; margin-bottom:1.5rem; background:#FFF7E8; border:1px solid #E8CE8F; border-radius:10px; padding:1rem;">
+    <p style="margin:0 0 8px; font-size:13px; font-weight:600;">Found your earlier saved data in this chat</p>
+    <p style="margin:0 0 8px; font-size:12.5px; color:var(--ink-soft);">Copy the text below and paste it back to Claude in the chat — it'll bake this in as the starting data for your downloaded file.</p>
+    <textarea id="recover-text" readonly style="width:100%; height:120px; font-family:monospace; font-size:11px; padding:8px; border:1px solid var(--line-strong); border-radius:6px;"></textarea>
+    <button id="copy-recover-btn" style="margin-top:8px; padding:7px 14px; border:1px solid var(--oak); background:#fff; color:var(--oak-dark); border-radius:6px; font-size:12.5px; cursor:pointer;">Copy to clipboard</button>
+  </div>
+
+  <div id="list-root"></div>
+
+</div>
+
+<div id="sync-modal-overlay" class="modal-overlay" style="display:none;">
+  <div class="modal">
+    <h3>Sync across devices</h3>
+    <p class="modal-desc">Connect this file to one shared cloud store so the same stock list shows on every phone and laptop that opens it.</p>
+    <ol class="modal-steps">
+      <li>Create a free account at <a href="https://jsonbin.io" target="_blank" rel="noopener">jsonbin.io</a>.</li>
+      <li>In the dashboard, copy your API key (labelled <b>X-MASTER-KEY</b>).</li>
+      <li>Paste it below. <b>On your very first device</b>, leave "Bin ID" blank and click "Create shared store" — it'll fill in a Bin ID for you.</li>
+      <li>Copy that Bin ID (and the same API key) into this same screen on every other phone/laptop, then click "Connect".</li>
+    </ol>
+    <div class="field full">
+      <label for="sync-api-key">API key (X-Master-Key)</label>
+      <input type="text" id="sync-api-key" placeholder="$2b$10$...">
+    </div>
+    <div class="field full">
+      <label for="sync-bin-id">Bin ID <span style="font-weight:400;">(blank on first device only)</span></label>
+      <input type="text" id="sync-bin-id" placeholder="e.g. 66f2a1c4...">
+    </div>
+    <div class="modal-actions">
+      <button id="sync-create-btn" class="add-btn" style="background:#fff;color:var(--oak-dark);border:1px solid var(--oak);">Create shared store</button>
+      <button id="sync-connect-btn" class="add-btn">Connect</button>
+    </div>
+    <p class="error-msg" id="sync-error"></p>
+    <button class="modal-close" id="sync-close-btn">Close</button>
+  </div>
+</div>
+
+<script>
+const STORAGE_KEY = 'stock-items-v2';
+
+const seedItems = [
+  // Wet Bar
+  {cat:'Wet Bar', desc:'Wet bar top — Right handed', size:'', qty:72, qtyL:null, notes:''},
+  {cat:'Wet Bar', desc:'Wet bar top — Left handed', size:'', qty:61, qtyL:null, notes:''},
+  {cat:'Wet Bar', desc:'Wet bar side — Right handed', size:'', qty:34, qtyL:null, notes:''},
+  {cat:'Wet Bar', desc:'Wet bar side — Left handed', size:'', qty:71, qtyL:null, notes:''},
+  {cat:'Wet Bar', desc:'Shelf', size:'', qty:124, qtyL:null, notes:''},
+  {cat:'Wet Bar', desc:'Black shelf', size:'', qty:119, qtyL:null, notes:''},
+  {cat:'Wet Bar', desc:'White Oak small divider', size:'', qty:126, qtyL:null, notes:''},
+  {cat:'Wet Bar', desc:'Cleats', size:'', qty:252, qtyL:null, notes:''},
+  {cat:'Wet Bar', desc:'Back', size:'', qty:25, qtyL:null, notes:''},
+  {cat:'Wet Bar', desc:'Divided wet bar', size:'', qty:114, qtyL:null, notes:''},
+  {cat:'Wet Bar', desc:'Doors wet bar', size:'', qty:18, qtyL:null, notes:''},
+  {cat:'Wet Bar', desc:'Side Left Handed', size:'854 x 568 x 32', qty:40, qtyL:null, notes:''},
+  {cat:'Wet Bar', desc:'Side Right Handed', size:'854 x 568 x 32', qty:26, qtyL:null, notes:''},
+  {cat:'Wet Bar', desc:'Cleats', size:'', qty:56, qtyL:null, notes:''},
+
+  // TV Panels
+  {cat:'TV Panels', desc:'Chipboard Back Cleat', size:'2139 x 300 x 16', qty:394, qtyL:null, notes:''},
+  {cat:'TV Panels', desc:'Chipboard Back TV Support', size:'1535 x 900', qty:199, qtyL:null, notes:''},
+  {cat:'TV Panels', desc:'S/F White Oak Center Panel', size:'', qty:101, qtyL:null, notes:''},
+  {cat:'TV Panels', desc:'MDF Cleats', size:'2155 x 57', qty:1386, qtyL:null, notes:''},
+  {cat:'TV Panels', desc:'MDF Cleat', size:'2155 x 54', qty:80, qtyL:null, notes:''},
+  {cat:'TV Panels', desc:'Oak Cleats', size:'2000 x 188', qty:473, qtyL:null, notes:''},
+
+  // Headboards
+  {cat:'Headboards', desc:'Left Side Panel S/F White Oak', size:'', qty:154, qtyL:null, notes:''},
+  {cat:'Headboards', desc:'Center Panel S/F White Oak', size:'', qty:125, qtyL:null, notes:''},
+  {cat:'Headboards', desc:'Right Side Panel S/F White Oak', size:'', qty:154, qtyL:null, notes:''},
+  {cat:'Headboards', desc:'D/F White Oak Cleat', size:'2011 x 54', qty:48, qtyL:null, notes:''},
+
+  // Completed Items
+  {cat:'Completed Items', desc:'Wet Bars Jax on it', size:'', qty:34, qtyL:null, notes:''},
+  {cat:'Completed Items', desc:'Wet bars', size:'', qty:74, qtyL:null, notes:''},
+  {cat:'Completed Items', desc:'Head Board', size:'', qty:79, qtyL:null, notes:''},
+  {cat:'Completed Items', desc:'Table', size:'', qty:43, qtyL:null, notes:''},
+  {cat:'Completed Items', desc:'TV Panel', size:'', qty:63, qtyL:null, notes:''},
+  {cat:'Completed Items', desc:'Pedestals', size:'500', qty:391, qtyL:null, notes:''},
+  {cat:'Completed Items', desc:'Drawer Box', size:'', qty:99, qtyL:null, notes:''},
+  {cat:'Completed Items', desc:'Cushioned Headboard Panel', size:'', qty:39, qtyL:null, notes:''},
+  {cat:'Completed Items', desc:'Mirror Panel', size:'', qty:245, qtyL:null, notes:''},
+  {cat:'Completed Items', desc:'Mirror', size:'', qty:317, qtyL:null, notes:''},
+  {cat:'Completed Items', desc:'Glass Shelf', size:'', qty:582, qtyL:null, notes:''},
+  {cat:'Completed Items', desc:'Pedestal Skirting', size:'', qty:268, qtyL:null, notes:''},
+
+  // White Oak Solid Stock
+  {cat:'White Oak Solid Stock', desc:'White Oak', size:'2109 x 50', qty:115, qtyL:null, notes:''},
+  {cat:'White Oak Solid Stock', desc:'White Oak', size:'510 x 40', qty:72, qtyL:null, notes:''},
+  {cat:'White Oak Solid Stock', desc:'White Oak', size:'360 x 40', qty:79, qtyL:null, notes:''},
+
+  // Marble
+  {cat:'Marble', desc:'Stone top', size:'', qty:367, qtyL:null, notes:''},
+
+  // Aluminum
+  {cat:'Aluminum', desc:'H-Rail (full size)', size:'', qty:18, qtyL:null, notes:''},
+  {cat:'Aluminum', desc:'Aluminum 19mm', size:'734', qty:25, qtyL:null, notes:''},
+  {cat:'Aluminum', desc:'Aluminum 19mm', size:'1316', qty:113, qtyL:null, notes:''},
+  {cat:'Aluminum', desc:'Aluminum 38mm', size:'', qty:481, qtyL:null, notes:''}
+];
+
+const CAT_ORDER = ['Wet Bar', 'TV Panels', 'Headboards'];
+
+let items = [];
+let editingId = null;
+
+const SYNC_CONFIG_KEY = 'stock-sync-config-v1';
+let syncConfig = null;
+let syncTimer = null;
+
+function uid(){ return 'i' + Date.now() + Math.random().toString(36).slice(2,7); }
+
+function loadSyncConfig(){
+  try{
+    const raw = localStorage.getItem(SYNC_CONFIG_KEY);
+    syncConfig = raw ? JSON.parse(raw) : null;
+  } catch(e){ syncConfig = null; }
+}
+
+function saveSyncConfig(cfg){
+  syncConfig = cfg;
+  try{ localStorage.setItem(SYNC_CONFIG_KEY, JSON.stringify(cfg)); } catch(e){}
+}
+
+function setSyncStatus(text, isError){
+  const el = document.getElementById('sync-status');
+  if(!el) return;
+  el.textContent = text;
+  el.style.color = isError ? 'var(--danger)' : '';
+}
+
+async function pullFromCloud(showBusy){
+  if(!syncConfig || !syncConfig.apiKey || !syncConfig.binId) return false;
+  try{
+    if(showBusy) setSyncStatus('Syncing…');
+    const res = await fetch('https://api.jsonbin.io/v3/b/' + syncConfig.binId + '/latest', {
+      headers: { 'X-Master-Key': syncConfig.apiKey }
+    });
+    if(!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    if(Array.isArray(data.record)){
+      items = data.record;
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+      render();
+    }
+    setSyncStatus('Synced — last update ' + new Date().toLocaleTimeString());
+    return true;
+  } catch(e){
+    setSyncStatus('Sync error — showing last saved copy on this device', true);
+    return false;
+  }
+}
+
+async function pushToCloud(){
+  if(!syncConfig || !syncConfig.apiKey || !syncConfig.binId) return false;
+  try{
+    const res = await fetch('https://api.jsonbin.io/v3/b/' + syncConfig.binId, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'X-Master-Key': syncConfig.apiKey },
+      body: JSON.stringify(items)
+    });
+    if(!res.ok) throw new Error('HTTP ' + res.status);
+    setSyncStatus('Synced — last update ' + new Date().toLocaleTimeString());
+    return true;
+  } catch(e){
+    setSyncStatus('Sync error — saved locally only on this device', true);
+    return false;
+  }
+}
+
+async function createSharedBin(apiKey){
+  const res = await fetch('https://api.jsonbin.io/v3/b', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Master-Key': apiKey, 'X-Bin-Name': 'oak-joinery-stock' },
+    body: JSON.stringify(items)
+  });
+  if(!res.ok) throw new Error('HTTP ' + res.status);
+  const data = await res.json();
+  return data.metadata.id;
+}
+
+function startSyncPolling(){
+  if(syncTimer) clearInterval(syncTimer);
+  if(!syncConfig) return;
+  syncTimer = setInterval(() => pullFromCloud(false), 20000);
+}
+
+async function load(){
+  loadSyncConfig();
+  try{
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if(raw){
+      items = JSON.parse(raw);
+      items = migrateHandedSplit(items);
+    } else {
+      items = seedItems.map(it => ({...it, id: uid()}));
+      await save();
+    }
+  } catch(e){
+    items = seedItems.map(it => ({...it, id: uid()}));
+    try{ await save(); } catch(e2){}
+  }
+  render();
+  checkForRecoverableData();
+
+  if(syncConfig && syncConfig.apiKey && syncConfig.binId){
+    document.getElementById('sync-api-key').value = syncConfig.apiKey;
+    document.getElementById('sync-bin-id').value = syncConfig.binId;
+    await pullFromCloud(true);
+    startSyncPolling();
+  } else {
+    setSyncStatus('Not connected — this device only');
+  }
+}
+
+async function checkForRecoverableData(){
+  try{
+    if(typeof window.storage === 'undefined' || !window.storage) return;
+    const res = await window.storage.get(STORAGE_KEY, false);
+    if(res && res.value){
+      const box = document.getElementById('recover-box');
+      const text = document.getElementById('recover-text');
+      box.style.display = 'block';
+      text.value = res.value;
+      document.getElementById('copy-recover-btn').addEventListener('click', async () => {
+        try{
+          await navigator.clipboard.writeText(res.value);
+          document.getElementById('copy-recover-btn').textContent = 'Copied ✓';
+        } catch(e){
+          text.select();
+        }
+      });
+    }
+  } catch(e){
+    // window.storage not available in this environment — nothing to recover
+  }
+}
+
+function migrateHandedSplit(list){
+  let changed = false;
+  const out = [];
+  list.forEach(it=>{
+    const isNumericCombined = (it.desc === 'Wet bar top' || it.desc === 'Wet bar side') &&
+      it.qtyL !== null && it.qtyL !== undefined;
+
+    const rlMatch = (it.desc === 'Wet bar top' || it.desc === 'Wet bar side') && it.size &&
+      it.size.match(/R\s*(\d+)\s*\/?\s*L\s*(\d+)/i);
+
+    if(isNumericCombined){
+      changed = true;
+      out.push({id: uid(), cat: it.cat, desc: it.desc + ' — Right handed', size: '', qty: it.qty, qtyL: null, notes: it.notes});
+      out.push({id: uid(), cat: it.cat, desc: it.desc + ' — Left handed', size: '', qty: it.qtyL, qtyL: null, notes: it.notes});
+    } else if(rlMatch){
+      changed = true;
+      out.push({id: uid(), cat: it.cat, desc: it.desc + ' — Right handed', size: '', qty: Number(rlMatch[1]), qtyL: null, notes: it.notes});
+      out.push({id: uid(), cat: it.cat, desc: it.desc + ' — Left handed', size: '', qty: Number(rlMatch[2]), qtyL: null, notes: it.notes});
+    } else {
+      out.push(it);
+    }
+  });
+  if(changed){
+    items = out;
+    save();
+  }
+  return out;
+}
+
+async function save(){
+  try{
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+  } catch(e){
+    console.error('Storage error', e);
+  }
+  if(syncConfig && syncConfig.apiKey && syncConfig.binId){
+    await pushToCloud();
+  }
+}
+
+function render(){
+  const root = document.getElementById('list-root');
+  const searchVal = document.getElementById('search').value.trim().toLowerCase();
+
+  const filtered = items.filter(it => {
+    if(!searchVal) return true;
+    return (it.desc + ' ' + it.cat + ' ' + it.size + ' ' + it.notes).toLowerCase().includes(searchVal);
+  });
+
+  document.getElementById('count-pill').textContent = items.length + ' item' + (items.length===1?'':'s');
+
+  const cats = document.getElementById('cat-list');
+  cats.innerHTML = '';
+  [...new Set(items.map(i=>i.cat).filter(Boolean))].forEach(c=>{
+    const opt = document.createElement('option');
+    opt.value = c;
+    cats.appendChild(opt);
+  });
+
+  if(filtered.length === 0){
+    root.innerHTML = '<div class="empty">' + (items.length===0 ? 'No items yet. Add your first one above.' : 'No items match your search.') + '</div>';
+    return;
+  }
+
+  const groups = {};
+  filtered.forEach(it=>{
+    const key = it.cat && it.cat.trim() ? it.cat.trim() : 'Uncategorised';
+    if(!groups[key]) groups[key] = [];
+    groups[key].push(it);
+  });
+
+  root.innerHTML = '';
+  const orderedCats = [
+    ...CAT_ORDER.filter(c => groups[c]),
+    ...Object.keys(groups).filter(c => !CAT_ORDER.includes(c))
+  ];
+  orderedCats.forEach(catName=>{
+    const catDiv = document.createElement('div');
+    catDiv.className = 'category';
+
+    const head = document.createElement('div');
+    head.className = 'category-head';
+    head.innerHTML = '<span>' + escapeHtml(catName) + '</span><span class="cat-count">' + groups[catName].length + '</span>';
+    catDiv.appendChild(head);
+
+    groups[catName].forEach(it=>{
+      const row = document.createElement('div');
+      row.className = 'item-row';
+
+      const main = document.createElement('div');
+      main.className = 'item-main';
+      const descEl = document.createElement('div');
+      descEl.className = 'item-desc editable';
+      descEl.textContent = it.desc;
+      descEl.title = 'Click to edit';
+      descEl.onclick = () => startEdit(it.id);
+      main.appendChild(descEl);
+      if(it.notes){
+        const notesEl = document.createElement('div');
+        notesEl.className = 'item-notes';
+        notesEl.textContent = it.notes;
+        main.appendChild(notesEl);
+      }
+
+      const size = document.createElement('div');
+      size.className = 'item-size';
+      size.textContent = it.size || '—';
+
+      const qty = document.createElement('div');
+      qty.className = 'item-qty';
+      qty.appendChild(buildStepper(it, 'qty', it.qtyL !== null && it.qtyL !== undefined ? 'R' : ''));
+      if(it.qtyL !== null && it.qtyL !== undefined){
+        qty.appendChild(buildStepper(it, 'qtyL', 'L'));
+      }
+
+      const actions = document.createElement('div');
+      actions.className = 'item-actions';
+      const editBtn = document.createElement('button');
+      editBtn.className = 'icon-btn';
+      editBtn.innerHTML = 'edit';
+      editBtn.onclick = () => startEdit(it.id);
+      const delBtn = document.createElement('button');
+      delBtn.className = 'icon-btn del';
+      delBtn.innerHTML = 'delete';
+      delBtn.onclick = () => deleteItem(it.id);
+      actions.appendChild(editBtn);
+      actions.appendChild(delBtn);
+
+      row.appendChild(main);
+      row.appendChild(size);
+      row.appendChild(qty);
+      row.appendChild(actions);
+      catDiv.appendChild(row);
+    });
+
+    root.appendChild(catDiv);
+  });
+}
+
+function buildStepper(item, field, label){
+  const wrap = document.createElement('div');
+  wrap.className = 'stepper';
+
+  if(label){
+    const lab = document.createElement('span');
+    lab.className = 'step-label';
+    lab.textContent = label;
+    wrap.appendChild(lab);
+  }
+
+  const minus = document.createElement('button');
+  minus.textContent = '−';
+  minus.setAttribute('aria-label', 'Subtract');
+  minus.onclick = () => adjustQty(item.id, field, -1);
+
+  const val = document.createElement('span');
+  val.className = 'step-val';
+  val.textContent = (item[field] === null || item[field] === undefined) ? 0 : item[field];
+
+  const plus = document.createElement('button');
+  plus.textContent = '+';
+  plus.setAttribute('aria-label', 'Add');
+  plus.onclick = () => adjustQty(item.id, field, 1);
+
+  wrap.appendChild(minus);
+  wrap.appendChild(val);
+  wrap.appendChild(plus);
+  return wrap;
+}
+
+async function adjustQty(id, field, delta){
+  const it = items.find(i=>i.id===id);
+  if(!it) return;
+  const current = Number(it[field]) || 0;
+  it[field] = Math.max(0, current + delta);
+  await save();
+  render();
+}
+
+function escapeHtml(s){
+  return (s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function startEdit(id){
+  const it = items.find(i=>i.id===id);
+  if(!it) return;
+  editingId = id;
+  const handed = it.qtyL !== null && it.qtyL !== undefined;
+  document.getElementById('in-cat').value = it.cat;
+  document.getElementById('in-desc').value = it.desc;
+  document.getElementById('in-size').value = it.size;
+  document.getElementById('in-handed').checked = handed;
+  document.getElementById('qty-single-field').style.display = handed ? 'none' : 'flex';
+  document.getElementById('qty-r-field').style.display = handed ? 'flex' : 'none';
+  document.getElementById('qty-l-field').style.display = handed ? 'flex' : 'none';
+  document.getElementById('in-qty').value = handed ? '' : it.qty;
+  document.getElementById('in-qty-r').value = handed ? it.qty : '';
+  document.getElementById('in-qty-l').value = handed ? it.qtyL : '';
+  document.getElementById('in-notes').value = it.notes;
+  document.getElementById('add-btn').textContent = 'Save changes';
+  document.getElementById('in-desc').focus();
+  window.scrollTo({top:0, behavior:'smooth'});
+}
+
+async function deleteItem(id){
+  items = items.filter(i=>i.id!==id);
+  await save();
+  render();
+}
+
+async function handleAdd(){
+  const desc = document.getElementById('in-desc').value.trim();
+  const cat = document.getElementById('in-cat').value.trim();
+  const size = document.getElementById('in-size').value.trim();
+  const notes = document.getElementById('in-notes').value.trim();
+  const handed = document.getElementById('in-handed').checked;
+  const errorEl = document.getElementById('error-msg');
+
+  let qty, qtyL;
+  if(handed){
+    qty = Number(document.getElementById('in-qty-r').value) || 0;
+    qtyL = Number(document.getElementById('in-qty-l').value) || 0;
+  } else {
+    qty = Number(document.getElementById('in-qty').value) || 0;
+    qtyL = null;
+  }
+
+  if(!desc){
+    errorEl.style.display = 'block';
+    document.getElementById('in-desc').focus();
+    return;
+  }
+  errorEl.style.display = 'none';
+
+  if(editingId){
+    const it = items.find(i=>i.id===editingId);
+    if(it){
+      it.cat = cat; it.desc = desc; it.size = size; it.qty = qty; it.qtyL = qtyL; it.notes = notes;
+    }
+    editingId = null;
+    document.getElementById('add-btn').textContent = 'Add to stock list';
+  } else {
+    items.push({id: uid(), cat, desc, size, qty, qtyL, notes});
+  }
+
+  document.getElementById('in-cat').value = '';
+  document.getElementById('in-desc').value = '';
+  document.getElementById('in-size').value = '';
+  document.getElementById('in-qty').value = '';
+  document.getElementById('in-qty-r').value = '';
+  document.getElementById('in-qty-l').value = '';
+  document.getElementById('in-notes').value = '';
+  document.getElementById('in-handed').checked = false;
+  document.getElementById('qty-single-field').style.display = 'flex';
+  document.getElementById('qty-r-field').style.display = 'none';
+  document.getElementById('qty-l-field').style.display = 'none';
+
+  await save();
+  render();
+}
+
+document.getElementById('in-handed').addEventListener('change', function(){
+  const handed = this.checked;
+  document.getElementById('qty-single-field').style.display = handed ? 'none' : 'flex';
+  document.getElementById('qty-r-field').style.display = handed ? 'flex' : 'none';
+  document.getElementById('qty-l-field').style.display = handed ? 'flex' : 'none';
+});
+
+document.getElementById('add-btn').addEventListener('click', handleAdd);
+document.getElementById('save-btn').addEventListener('click', async () => {
+  await save();
+  const msg = document.getElementById('saved-msg');
+  msg.classList.add('show');
+  setTimeout(() => msg.classList.remove('show'), 1500);
+});
+
+document.getElementById('search').addEventListener('input', render);
+document.getElementById('in-desc').addEventListener('keydown', e=>{
+  if(e.key === 'Enter'){ e.preventDefault(); handleAdd(); }
+});
+
+document.getElementById('sync-settings-btn').addEventListener('click', () => {
+  document.getElementById('sync-error').style.display = 'none';
+  if(syncConfig){
+    document.getElementById('sync-api-key').value = syncConfig.apiKey || '';
+    document.getElementById('sync-bin-id').value = syncConfig.binId || '';
+  }
+  document.getElementById('sync-modal-overlay').style.display = 'flex';
+});
+document.getElementById('sync-close-btn').addEventListener('click', () => {
+  document.getElementById('sync-modal-overlay').style.display = 'none';
+});
+document.getElementById('sync-modal-overlay').addEventListener('click', (e) => {
+  if(e.target.id === 'sync-modal-overlay') document.getElementById('sync-modal-overlay').style.display = 'none';
+});
+
+document.getElementById('sync-create-btn').addEventListener('click', async () => {
+  const apiKey = document.getElementById('sync-api-key').value.trim();
+  const errEl = document.getElementById('sync-error');
+  const btn = document.getElementById('sync-create-btn');
+  errEl.style.display = 'none';
+  if(!apiKey){
+    errEl.textContent = 'Enter your API key first.';
+    errEl.style.display = 'block';
+    return;
+  }
+  btn.textContent = 'Creating…';
+  btn.disabled = true;
+  try{
+    const binId = await createSharedBin(apiKey);
+    saveSyncConfig({apiKey, binId});
+    document.getElementById('sync-bin-id').value = binId;
+    setSyncStatus('Connected — copy this Bin ID to your other devices');
+    startSyncPolling();
+  } catch(e){
+    errEl.textContent = 'Could not create a shared store — check the API key and try again.';
+    errEl.style.display = 'block';
+  } finally {
+    btn.textContent = 'Create shared store';
+    btn.disabled = false;
+  }
+});
+
+document.getElementById('sync-connect-btn').addEventListener('click', async () => {
+  const apiKey = document.getElementById('sync-api-key').value.trim();
+  const binId = document.getElementById('sync-bin-id').value.trim();
+  const errEl = document.getElementById('sync-error');
+  const btn = document.getElementById('sync-connect-btn');
+  errEl.style.display = 'none';
+  if(!apiKey || !binId){
+    errEl.textContent = 'Enter both the API key and the Bin ID.';
+    errEl.style.display = 'block';
+    return;
+  }
+  btn.textContent = 'Connecting…';
+  btn.disabled = true;
+  saveSyncConfig({apiKey, binId});
+  const ok = await pullFromCloud(true);
+  btn.textContent = 'Connect';
+  btn.disabled = false;
+  if(ok){
+    startSyncPolling();
+    document.getElementById('sync-modal-overlay').style.display = 'none';
+  } else {
+    errEl.textContent = 'Could not connect — check the API key and Bin ID and try again.';
+    errEl.style.display = 'block';
+  }
+});
+
+window.addEventListener('focus', () => { if(syncConfig) pullFromCloud(false); });
+
+document.getElementById('print-btn').addEventListener('click', () => window.print());
+
+function buildStockPdfBlob(){
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+
+  doc.setFontSize(14);
+  doc.setFont(undefined, 'bold');
+  doc.text('Oak Joinery', 14, 18);
+  doc.setFontSize(9);
+  doc.setFont(undefined, 'normal');
+  doc.text('16 Bowling Avenue, Kramerville, Johannesburg', 14, 24);
+  doc.text('VAT No 4390291278  ·  Reg No 2022/532088/07', 14, 29);
+
+  doc.setFontSize(16);
+  doc.setFont(undefined, 'bold');
+  doc.text('Stock List', 14, 40);
+  doc.setFontSize(9);
+  doc.setFont(undefined, 'normal');
+  doc.text('Generated ' + new Date().toLocaleString(), 14, 46);
+
+  const groups = {};
+  items.forEach(it=>{
+    const key = it.cat && it.cat.trim() ? it.cat.trim() : 'Uncategorised';
+    if(!groups[key]) groups[key] = [];
+    groups[key].push(it);
+  });
+  const orderedCats = [
+    ...CAT_ORDER.filter(c => groups[c]),
+    ...Object.keys(groups).filter(c => !CAT_ORDER.includes(c))
+  ];
+
+  let y = 54;
+  orderedCats.forEach(catName=>{
+    const rows = groups[catName].map(it=>{
+      const qtyStr = (it.qtyL !== null && it.qtyL !== undefined)
+        ? ('R ' + it.qty + '  /  L ' + it.qtyL)
+        : String(it.qty);
+      return [it.desc, it.size || '—', qtyStr, it.notes || ''];
+    });
+    doc.autoTable({
+      startY: y,
+      head: [[catName, 'Size', 'Qty', 'Notes']],
+      body: rows,
+      styles: { fontSize: 8, cellPadding: 2 },
+      headStyles: { fillColor: [168, 98, 46] },
+      margin: { left: 14, right: 14 }
+    });
+    y = doc.lastAutoTable.finalY + 8;
+    if(y > 270){ doc.addPage(); y = 20; }
+  });
+
+  return doc.output('blob');
+}
+
+async function generateAndSharePdf(){
+  const btn = document.getElementById('share-pdf-btn');
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Preparing PDF…';
+  try{
+    const blob = buildStockPdfBlob();
+    const file = new File([blob], 'oak-joinery-stock-list.pdf', { type: 'application/pdf' });
+
+    if(navigator.canShare && navigator.canShare({ files: [file] })){
+      await navigator.share({
+        files: [file],
+        title: 'Oak Joinery — Stock List',
+        text: 'Oak Joinery stock list — ' + new Date().toLocaleDateString()
+      });
+    } else {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'oak-joinery-stock-list.pdf';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setSyncStatus('PDF downloaded — attach it in WhatsApp or your email app');
+    }
+  } catch(e){
+    if(e && e.name !== 'AbortError'){
+      alert('Could not create the PDF. Try again, or use Print instead.');
+    }
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
+  }
+}
+
+document.getElementById('share-pdf-btn').addEventListener('click', generateAndSharePdf);
+
+let deferredInstallPrompt = null;
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  deferredInstallPrompt = e;
+  document.getElementById('install-btn').style.display = 'inline-block';
+});
+document.getElementById('install-btn').addEventListener('click', async () => {
+  if(!deferredInstallPrompt) return;
+  deferredInstallPrompt.prompt();
+  await deferredInstallPrompt.userChoice;
+  deferredInstallPrompt = null;
+  document.getElementById('install-btn').style.display = 'none';
+});
+window.addEventListener('appinstalled', () => {
+  document.getElementById('install-btn').style.display = 'none';
+});
+
+const isIos = /iphone|ipad|ipod/.test(window.navigator.userAgent.toLowerCase());
+const isInStandaloneMode = ('standalone' in window.navigator) && window.navigator.standalone;
+if(isIos && !isInStandaloneMode){
+  document.getElementById('ios-install-hint').style.display = 'inline-block';
+}
+
+if('serviceWorker' in navigator){
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+  });
+}
+
+load();
+</script>
+</body>
+</html>
