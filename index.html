@@ -493,7 +493,7 @@
 <div id="dispatch-link-modal-overlay" class="modal-overlay" style="display:none;">
   <div class="modal">
     <h3>Link to dispatch app</h3>
-    <p class="modal-desc">Connect this stock list to your dispatch app's jsonbin store, so "Mark built" can send an item straight into the dispatch app's Unfinished column.</p>
+    <p class="modal-desc">Connect this stock list to your dispatch app's jsonbin store. This also makes logins shared: once linked, the same usernames and PINs from the dispatch app work here too, and "Mark built" can send an item straight into the dispatch app's Unfinished column.</p>
     <ol class="modal-steps">
       <li>Use the SAME jsonbin API key your dispatch app is connected with.</li>
       <li>Open the dispatch app, click "Sync across devices" there, and copy its Bin ID (not this stock list's own Bin ID — a different one).</li>
@@ -679,6 +679,64 @@ function saveDispatchLink(cfg){
   try{ localStorage.setItem(DISPATCH_LINK_KEY, JSON.stringify(cfg)); } catch(e){}
 }
 
+// Users now live on the dispatch app's shared board (same bin as
+// dispatchLink), so logins match between the two apps. Local
+// USERS_STORAGE_KEY is kept only as an offline fallback cache.
+async function pullUsersFromDispatch(){
+  if(!dispatchLink || !dispatchLink.apiKey || !dispatchLink.binId) return false;
+  try{
+    const res = await fetch('https://api.jsonbin.io/v3/b/' + dispatchLink.binId + '/latest', {
+      headers: { 'X-Master-Key': dispatchLink.apiKey }
+    });
+    if(!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    const board = data.record || {};
+    users = Array.isArray(board.users) ? board.users : [];
+    saveUsersLocal();
+    return true;
+  } catch(e){
+    return false;
+  }
+}
+
+async function pushUsersToDispatch(){
+  if(!dispatchLink || !dispatchLink.apiKey || !dispatchLink.binId){
+    saveUsersLocal();
+    return false;
+  }
+  try{
+    const res = await fetch('https://api.jsonbin.io/v3/b/' + dispatchLink.binId + '/latest', {
+      headers: { 'X-Master-Key': dispatchLink.apiKey }
+    });
+    if(!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    const board = data.record || {};
+    board.users = users;
+    const putRes = await fetch('https://api.jsonbin.io/v3/b/' + dispatchLink.binId, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'X-Master-Key': dispatchLink.apiKey },
+      body: JSON.stringify(board)
+    });
+    if(!putRes.ok) throw new Error('HTTP ' + putRes.status);
+    saveUsersLocal();
+    return true;
+  } catch(e){
+    saveUsersLocal();
+    return false;
+  }
+}
+
+// Call this instead of save()/saveUsersLocal() anywhere the `users`
+// array itself changes (create/edit/delete/root-setup) — routes the
+// write to the shared dispatch board when linked, local cache otherwise.
+async function saveUsers(){
+  if(dispatchLink && dispatchLink.apiKey && dispatchLink.binId){
+    await pushUsersToDispatch();
+  } else {
+    saveUsersLocal();
+  }
+}
+
 async function sendToDispatchUnfinished(type, qty, ref){
   if(!dispatchLink || !dispatchLink.apiKey || !dispatchLink.binId){
     throw new Error('Dispatch app link not set up');
@@ -753,10 +811,8 @@ async function pullFromCloud(showBusy){
       items = record; // legacy shape — bin predates users, nothing to merge
     } else if(record && Array.isArray(record.items)){
       items = record.items;
-      users = Array.isArray(record.users) ? record.users : users;
     }
     localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
-    saveUsersLocal();
     render();
     renderUserBadge();
     applyPermissionsToUi();
@@ -774,7 +830,7 @@ async function pushToCloud(){
     const res = await fetch('https://api.jsonbin.io/v3/b/' + syncConfig.binId, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', 'X-Master-Key': syncConfig.apiKey },
-      body: JSON.stringify({ items, users })
+      body: JSON.stringify({ items })
     });
     if(!res.ok) throw new Error('HTTP ' + res.status);
     setSyncStatus('Synced — last update ' + new Date().toLocaleTimeString());
@@ -789,7 +845,7 @@ async function createSharedBin(apiKey){
   const res = await fetch('https://api.jsonbin.io/v3/b', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Master-Key': apiKey, 'X-Bin-Name': 'oak-joinery-stock' },
-    body: JSON.stringify({ items, users })
+    body: JSON.stringify({ items })
   });
   if(!res.ok) throw new Error('HTTP ' + res.status);
   const data = await res.json();
@@ -834,6 +890,7 @@ async function load(){
   if(dispatchLink){
     document.getElementById('dispatch-link-api-key').value = dispatchLink.apiKey || '';
     document.getElementById('dispatch-link-bin-id').value = dispatchLink.binId || '';
+    await pullUsersFromDispatch(); // same usernames/PINs as the dispatch app
   }
 
   await checkLogin();
@@ -937,7 +994,7 @@ function render(){
   root.innerHTML = '';
   const orderedCats = [
     ...CAT_ORDER.filter(c => groups[c]),
-    ...Object.keys(groups).filter(c => !CAT_ORDER.includes(c)).sort((a, b) => a.localeCompare(b, undefined, {sensitivity: 'base'}))
+    ...Object.keys(groups).filter(c => !CAT_ORDER.includes(c))
   ];
   orderedCats.forEach(catName=>{
     const catDiv = document.createElement('div');
@@ -948,8 +1005,7 @@ function render(){
     head.innerHTML = '<span>' + escapeHtml(catName) + '</span><span class="cat-count">' + groups[catName].length + '</span>';
     catDiv.appendChild(head);
 
-    const sortedItems = groups[catName].slice().sort((a, b) => a.desc.localeCompare(b.desc, undefined, {sensitivity: 'base'}));
-    sortedItems.forEach(it=>{
+    groups[catName].forEach(it=>{
       const row = document.createElement('div');
       row.className = 'item-row';
 
@@ -1297,6 +1353,7 @@ document.getElementById('sync-connect-btn').addEventListener('click', async () =
 });
 
 window.addEventListener('focus', () => { if(syncConfig) pullFromCloud(false); });
+window.addEventListener('focus', () => { if(dispatchLink) pullUsersFromDispatch().then(() => { renderUserBadge(); applyPermissionsToUi(); }); });
 
 document.getElementById('dispatch-link-btn').addEventListener('click', () => {
   if(!can('manageSync')) return;
@@ -1356,12 +1413,12 @@ function buildStockPdfBlob(){
   });
   const orderedCats = [
     ...CAT_ORDER.filter(c => groups[c]),
-    ...Object.keys(groups).filter(c => !CAT_ORDER.includes(c)).sort((a, b) => a.localeCompare(b, undefined, {sensitivity: 'base'}))
+    ...Object.keys(groups).filter(c => !CAT_ORDER.includes(c))
   ];
 
   let y = 54;
   orderedCats.forEach(catName=>{
-    const rows = groups[catName].slice().sort((a, b) => a.desc.localeCompare(b.desc, undefined, {sensitivity: 'base'})).map(it=>{
+    const rows = groups[catName].map(it=>{
       const qtyStr = (it.qtyL !== null && it.qtyL !== undefined)
         ? ('R ' + it.qty + '  /  L ' + it.qtyL)
         : String(it.qty);
@@ -1579,7 +1636,7 @@ async function createRootAccount(){
   users.push(rootUser);
   currentUserId = rootUser.id;
   try{ localStorage.setItem('currentUserId', rootUser.id); }catch(e){}
-  await save();
+  await saveUsers();
   hideLoginOverlay();
   renderUserBadge();
   applyPermissionsToUi();
@@ -1720,7 +1777,7 @@ async function saveUserForm(editId){
   } else {
     users.push({ id: uid(), username, pin: await hashPin(pin), isRoot, permissions });
   }
-  await save();
+  await saveUsers();
   renderUserBadge();
   applyPermissionsToUi();
   openManageUsers();
@@ -1739,7 +1796,7 @@ async function deleteUser(userId){
   }
   if(!confirm(`Remove ${target.username}?`)) return;
   users = users.filter(u => u.id !== userId);
-  await save();
+  await saveUsers();
   openManageUsers();
 }
 
