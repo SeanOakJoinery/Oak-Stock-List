@@ -1,4 +1,4 @@
-const CACHE_NAME = 'oak-stock-shell-v1';
+const CACHE_NAME = 'oak-stock-shell-v2';
 const SHELL_FILES = [
   './',
   './index.html',
@@ -23,11 +23,35 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
-// App shell (HTML/manifest/icons) is cached so the app opens offline.
-// Live data (sync calls to jsonbin.io / Google Drive) always goes to the network.
+// FIXED (real issue hit during development): the previous version used a
+// cache-FIRST strategy for everything, which meant once index.html was
+// cached, every future visit kept serving that same old copy forever —
+// deploying a genuinely new index.html to GitHub Pages had no visible
+// effect at all until CACHE_NAME itself was bumped, which is easy to
+// forget and did in fact get forgotten. Now: the app shell (index.html /
+// manifest.json / navigation requests) is network-FIRST — always try the
+// real network copy first so a new deploy shows up on the very next load,
+// only falling back to the cached copy if there's no network (offline).
+// Icons rarely change, so they stay cache-first to save a request.
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
-  if (url.origin !== self.location.origin) return; // let cross-origin sync calls pass straight through
+  if (url.origin !== self.location.origin) return; // let cross-origin sync calls (jsonbin, Drive) pass straight through
+
+  const isShellDoc = event.request.mode === 'navigate' ||
+    url.pathname.endsWith('/index.html') ||
+    url.pathname.endsWith('/manifest.json') ||
+    url.pathname === '/' || url.pathname.endsWith('/');
+
+  if (isShellDoc){
+    event.respondWith(
+      fetch(event.request).then((res) => {
+        const copy = res.clone();
+        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy)).catch(() => {});
+        return res;
+      }).catch(() => caches.match(event.request))
+    );
+    return;
+  }
 
   event.respondWith(
     caches.match(event.request).then((cached) => {
