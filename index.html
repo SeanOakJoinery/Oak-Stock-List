@@ -938,7 +938,7 @@ async function pullFromCloud(showBusy){
   if(!syncConfig || !syncConfig.apiKey || !syncConfig.binId) return false;
   try{
     if(showBusy) setSyncStatus('Syncing…');
-    const res = await fetch('https://api.jsonbin.io/v3/b/' + syncConfig.binId + '/latest', {
+    const res = await fetchWithRetry('https://api.jsonbin.io/v3/b/' + syncConfig.binId + '/latest', {
       headers: { 'X-Master-Key': syncConfig.apiKey }
     });
     if(!res.ok) throw new Error('HTTP ' + res.status);
@@ -964,7 +964,7 @@ async function pullFromCloud(showBusy){
 async function pushToCloud(){
   if(!syncConfig || !syncConfig.apiKey || !syncConfig.binId) return false;
   try{
-    const res = await fetch('https://api.jsonbin.io/v3/b/' + syncConfig.binId, {
+    const res = await fetchWithRetry('https://api.jsonbin.io/v3/b/' + syncConfig.binId, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', 'X-Master-Key': syncConfig.apiKey },
       body: JSON.stringify({ items })
@@ -979,7 +979,7 @@ async function pushToCloud(){
 }
 
 async function createSharedBin(apiKey){
-  const res = await fetch('https://api.jsonbin.io/v3/b', {
+  const res = await fetchWithRetry('https://api.jsonbin.io/v3/b', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Master-Key': apiKey, 'X-Bin-Name': 'oak-joinery-stock' },
     body: JSON.stringify({ items })
