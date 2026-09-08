@@ -206,8 +206,16 @@
     border-bottom:1.5px solid var(--line-strong);
     display:flex;
     justify-content:space-between;
+    align-items:center;
   }
   .category-head .cat-count{color:var(--ink-soft);font-weight:400;}
+  .cat-name-wrap{display:flex;align-items:center;gap:8px;}
+  .cat-rename-btn{
+    background:none;border:none;cursor:pointer;
+    color:var(--ink-soft);font-weight:400;font-size:11px;
+    text-decoration:underline;padding:0;
+  }
+  .cat-rename-btn:hover{color:var(--oak-dark);}
 
   .item-row{
     display:grid;
@@ -1158,7 +1166,34 @@ function render(){
 
     const head = document.createElement('div');
     head.className = 'category-head';
-    head.innerHTML = '<span>' + escapeHtml(catName) + '</span><span class="cat-count">' + groups[catName].length + '</span>';
+
+    const left = document.createElement('span');
+    left.className = 'cat-name-wrap';
+    const nameSpan = document.createElement('span');
+    nameSpan.textContent = catName;
+    left.appendChild(nameSpan);
+    // Renames every item currently grouped under this heading at once,
+    // per user request ("root must be able to edit the category/job" —
+    // clarified to mean renaming a whole category, not one item's field
+    // at a time via the existing per-item edit form, which already
+    // supported that). Uses its own dedicated renameCategories
+    // permission (added to the shared dispatch-app user schema, same
+    // as markBuilt) rather than reusing manageTypes, per user request —
+    // root always has this via can()'s isRoot bypass either way.
+    if(can('renameCategories')){
+      const renameBtn = document.createElement('button');
+      renameBtn.className = 'cat-rename-btn';
+      renameBtn.textContent = 'rename';
+      renameBtn.onclick = () => renameCategory(catName);
+      left.appendChild(renameBtn);
+    }
+    head.appendChild(left);
+
+    const countSpan = document.createElement('span');
+    countSpan.className = 'cat-count';
+    countSpan.textContent = groups[catName].length;
+    head.appendChild(countSpan);
+
     catDiv.appendChild(head);
 
     groups[catName].forEach(it=>{
@@ -1294,6 +1329,25 @@ function startEdit(id){
   document.getElementById('add-btn').textContent = 'Save changes';
   document.getElementById('in-desc').focus();
   window.scrollTo({top:0, behavior:'smooth'});
+}
+
+async function renameCategory(oldName){
+  if(!can('renameCategories')) return;
+  const newName = prompt(`Rename category "${oldName}" to:`, oldName);
+  if(newName === null) return;
+  const trimmed = newName.trim();
+  if(!trimmed || trimmed === oldName) return;
+
+  const groupKey = (it) => (it.cat && it.cat.trim()) ? it.cat.trim() : 'Uncategorised';
+  const mergingIntoExisting = items.some(it => groupKey(it) === trimmed);
+  if(mergingIntoExisting && !confirm(`"${trimmed}" already exists as a category — merge "${oldName}" into it?`)) return;
+
+  let count = 0;
+  items.forEach(it => {
+    if(groupKey(it) === oldName){ it.cat = trimmed; count++; }
+  });
+  await save();
+  render();
 }
 
 async function deleteItem(id){
