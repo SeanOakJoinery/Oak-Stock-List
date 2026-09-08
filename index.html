@@ -991,7 +991,17 @@ function startDispatchUsersPolling(){
   if(dispatchUsersPollTimer) clearInterval(dispatchUsersPollTimer);
   if(!dispatchLink) return;
   dispatchUsersPollTimer = setInterval(() => {
-    pullUsersFromDispatch().then(() => { renderUserBadge(); applyPermissionsToUi(); });
+    // BUGFIX 2026-09-08: originally only called renderUserBadge() +
+    // applyPermissionsToUi() here — neither of those touches the per-item
+    // action buttons (edit/mark built/delete), which are built inside
+    // render()'s loop via can(...) checks. That meant a permission change
+    // made on the dispatch app while this device sat idle would silently
+    // never show up here until something else happened to trigger a
+    // render() (e.g. editing an item) — from this device's point of view
+    // it looked like the permission just "wasn't pulling through" even
+    // though the pull itself was working correctly. render() now runs
+    // every poll too so this reflects live.
+    pullUsersFromDispatch().then(() => { renderUserBadge(); applyPermissionsToUi(); render(); });
   }, 120000); // every 2 minutes — keeps shared logins fresh across devices without needing a manual refresh
 }
 
@@ -1028,6 +1038,13 @@ async function load(){
     document.getElementById('dispatch-link-api-key').value = dispatchLink.apiKey || '';
     document.getElementById('dispatch-link-bin-id').value = dispatchLink.binId || '';
     await pullUsersFromDispatch(); // same usernames/PINs as the dispatch app
+    render(); // BUGFIX 2026-09-08: the first render() above (before this
+              // pull) used whatever permissions were in the local cache —
+              // if root had just granted a new permission (e.g. markBuilt)
+              // on the dispatch app, this device wouldn't show it until
+              // some unrelated action happened to call render() again.
+              // Re-rendering here means a fresh page load always reflects
+              // the real, current permissions instead of a stale cache.
     startDispatchUsersPolling();
   }
 
@@ -1491,7 +1508,7 @@ document.getElementById('sync-connect-btn').addEventListener('click', async () =
 });
 
 window.addEventListener('focus', () => { if(syncConfig) pullFromCloud(false); });
-window.addEventListener('focus', () => { if(dispatchLink) pullUsersFromDispatch().then(() => { renderUserBadge(); applyPermissionsToUi(); }); });
+window.addEventListener('focus', () => { if(dispatchLink) pullUsersFromDispatch().then(() => { renderUserBadge(); applyPermissionsToUi(); render(); }); }); // render() added 2026-09-08, same reasoning as startDispatchUsersPolling above
 
 document.getElementById('dispatch-link-btn').addEventListener('click', () => {
   if(!can('manageSync')) return;
