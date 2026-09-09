@@ -245,6 +245,20 @@
     white-space:nowrap;
   }
   .item-actions{display:flex;gap:6px;align-self:center;}
+  .item-row.has-required{grid-template-columns:1fr auto auto auto auto;}
+  .item-required{display:flex;flex-direction:column;align-items:center;gap:2px;align-self:center;}
+  .item-required label{font-size:10px;color:var(--ink-soft);text-transform:uppercase;letter-spacing:0.04em;}
+  .item-required input{
+    width:48px;
+    text-align:center;
+    font-size:13px;
+    padding:4px 2px;
+    border:1px solid var(--line-strong);
+    border-radius:6px;
+    background:var(--card);
+    color:var(--ink);
+  }
+  .item-required input.short{border-color:var(--danger);color:var(--danger);}
   .icon-btn{
     background:none;
     border:none;
@@ -463,6 +477,7 @@
     <button class="ghost-btn" id="print-btn">Print</button>
     <button class="ghost-btn" id="share-pdf-btn">Share PDF</button>
     <button class="ghost-btn" id="install-btn" style="display:none;">Install app</button>
+    <button class="ghost-btn" id="order-list-btn" style="display:none;">Order list</button>
     <span class="ios-install-hint" id="ios-install-hint" style="display:none;">To install: tap Share, then "Add to Home Screen"</span>
   </div>
 
@@ -562,6 +577,7 @@
 </div>
 
 <div id="userModalLayer"></div>
+<div id="orderListModalLayer"></div>
 
 <script>
 const STORAGE_KEY = 'stock-items-v2';
@@ -634,6 +650,22 @@ let editingId = null;
 const SYNC_CONFIG_KEY = 'stock-sync-config-v1';
 let syncConfig = null;
 let syncTimer = null;
+
+// Baked-in credentials for this app's OWN item-list shared store — same
+// idea as DEFAULT_DISPATCH_LINK below: bake the API key and Bin ID into
+// the app itself so every device auto-connects to the same shared stock
+// list on first load, instead of someone having to manually paste these
+// into "Sync across devices" on every single device/install. Per user
+// request: "not to add the api and bin to every app that gets installed".
+// Same caveat as elsewhere: visible in page source, not a real secret,
+// fine for a single-board internal staff tool. This is a DIFFERENT bin
+// from DEFAULT_DISPATCH_LINK's manifest bin — that one holds the
+// dispatch app's board (users + dispatch items), this one holds just
+// this app's own stock items list.
+const DEFAULT_SYNC_CONFIG = {
+  apiKey: '$2a$10$l6JD2KxQKAU7bhxR7mJFAOtoHFmgMxKgUWE0rHo7zLCpC3OzRFzim',
+  binId: '6aa004d9ac6210605ab383a4'
+};
 
 // Users & permissions — client-side only, NOT real security (see
 // dispatch app's dev notes for the full caveat — same limitation
@@ -905,11 +937,37 @@ async function sendToDispatchUnfinished(type, qty, ref){
 
 function uid(){ return 'i' + Date.now() + Math.random().toString(36).slice(2,7); }
 
+// Natural/alphanumeric sort — see the identical helper in the dispatch
+// app for the full explanation. Same reasoning here: item descriptions
+// and sizes both contain embedded numbers ("Cleat", "1562 x 100 x 17")
+// that need numeric comparison, not plain character-by-character
+// string comparison.
+function naturalCompare(a, b){
+  const ax = [], bx = [];
+  String(a || '').replace(/(\d+)|(\D+)/g, (_, num, str) => { ax.push([num ? parseInt(num, 10) : Infinity, str || '']); return ''; });
+  String(b || '').replace(/(\d+)|(\D+)/g, (_, num, str) => { bx.push([num ? parseInt(num, 10) : Infinity, str || '']); return ''; });
+  while(ax.length && bx.length){
+    const an = ax.shift(), bn = bx.shift();
+    const nn = (an[0] - bn[0]) || an[1].localeCompare(bn[1], undefined, {sensitivity: 'base'});
+    if(nn) return nn;
+  }
+  return ax.length - bx.length;
+}
+
 function loadSyncConfig(){
   try{
     const raw = localStorage.getItem(SYNC_CONFIG_KEY);
     syncConfig = raw ? JSON.parse(raw) : null;
   } catch(e){ syncConfig = null; }
+  if(!syncConfig || !syncConfig.apiKey || !syncConfig.binId){
+    // Nothing manually configured — fall back to the baked-in defaults
+    // so this device auto-joins the shared stock list without any setup.
+    // A manual override (a different Bin ID, if ever needed) still
+    // persists and takes precedence on the next load — this only fills
+    // the gap when nothing real is saved yet.
+    syncConfig = { apiKey: DEFAULT_SYNC_CONFIG.apiKey, binId: DEFAULT_SYNC_CONFIG.binId };
+    saveSyncConfig(syncConfig);
+  }
 }
 
 function saveSyncConfig(cfg){
@@ -1196,6 +1254,16 @@ function render(){
 
     catDiv.appendChild(head);
 
+    // Per user request: "everything running alphabetically and with
+    // sizes" — sort by description first, falling back to a natural
+    // (number-aware) comparison of the combined desc+size so identical
+    // descriptions with different sizes land in a sensible numeric
+    // order instead of insertion order.
+    groups[catName].sort((a, b) => naturalCompare(
+      (a.desc || '') + ' ' + (a.size || ''),
+      (b.desc || '') + ' ' + (b.size || '')
+    ));
+
     groups[catName].forEach(it=>{
       const row = document.createElement('div');
       row.className = 'item-row';
@@ -1226,6 +1294,37 @@ function render(){
         qty.appendChild(buildStepper(it, 'qtyL', 'L'));
       }
 
+      // Root-only "required" (par level) field, per user request: root
+      // sets how many of a part should be on hand; the app compares
+      // this against the actual qty to work out shortages for the
+      // Order List (see buildOrderList/openOrderList below). Hardcoded
+      // to isRoot specifically rather than a grantable permission —
+      // user said "only root users" for this one, unlike markBuilt/
+      // renameCategories which were explicitly asked to be per-person.
+      const currentUser = getCurrentUser();
+      let requiredEl = null;
+      if(currentUser && currentUser.isRoot){
+        requiredEl = document.createElement('div');
+        requiredEl.className = 'item-required';
+        const lab = document.createElement('label');
+        lab.textContent = 'Req.';
+        const totalQty = (Number(it.qty) || 0) + (Number(it.qtyL) || 0);
+        const inp = document.createElement('input');
+        inp.type = 'number';
+        inp.min = '0';
+        inp.value = (it.required === null || it.required === undefined) ? '' : it.required;
+        inp.placeholder = '0';
+        if(it.required && totalQty < Number(it.required)) inp.classList.add('short');
+        inp.onchange = async () => {
+          const v = parseInt(inp.value, 10);
+          it.required = (isNaN(v) || v <= 0) ? null : v;
+          await save();
+          render();
+        };
+        requiredEl.appendChild(lab);
+        requiredEl.appendChild(inp);
+      }
+
       const actions = document.createElement('div');
       actions.className = 'item-actions';
       if(can('addItems')){
@@ -1253,6 +1352,10 @@ function render(){
       row.appendChild(main);
       row.appendChild(size);
       row.appendChild(qty);
+      if(requiredEl){
+        row.classList.add('has-required');
+        row.appendChild(requiredEl);
+      }
       row.appendChild(actions);
       catDiv.appendChild(row);
     });
@@ -1595,6 +1698,7 @@ document.getElementById('dispatch-link-connect-btn').addEventListener('click', (
 });
 
 document.getElementById('print-btn').addEventListener('click', () => { if(can('exportData')) window.print(); });
+document.getElementById('order-list-btn').addEventListener('click', openOrderList);
 
 function buildStockPdfBlob(){
   const { jsPDF } = window.jspdf;
@@ -1880,6 +1984,8 @@ function applyPermissionsToUi(){
   set('sync-settings-btn', can('manageSync'));
   set('dispatch-link-btn', can('manageSync'));
   set('manage-users-btn', can('manageUsers'));
+  const cu = getCurrentUser();
+  set('order-list-btn', !!(cu && cu.isRoot));
   render();
 }
 
@@ -1891,6 +1997,84 @@ const PERMISSION_LABELS = [
   ['manageSync', 'Manage sync & dispatch app link'],
   ['manageUsers', 'Manage users']
 ];
+
+// Root-only Order List: compares each item's "required" (par level, set
+// via the item-required input added to render()) against its actual
+// total quantity (qty + qtyL for split R/L items), and lists every item
+// that's short, grouped by category, with the missing amount — per user
+// request ("select how many of that part fits into it so the app can
+// calculate what is missing and put that with quantities on an order
+// list").
+function buildOrderListData(){
+  const shortfalls = items
+    .filter(it => it.required && (Number(it.qty) || 0) + (Number(it.qtyL) || 0) < Number(it.required))
+    .map(it => ({
+      cat: (it.cat && it.cat.trim()) ? it.cat.trim() : 'Uncategorised',
+      desc: it.desc,
+      size: it.size || '',
+      have: (Number(it.qty) || 0) + (Number(it.qtyL) || 0),
+      required: Number(it.required),
+      missing: Number(it.required) - ((Number(it.qty) || 0) + (Number(it.qtyL) || 0))
+    }));
+  shortfalls.sort((a, b) => naturalCompare(a.cat + ' ' + a.desc + ' ' + a.size, b.cat + ' ' + b.desc + ' ' + b.size));
+  return shortfalls;
+}
+
+function openOrderList(){
+  const cu = getCurrentUser();
+  if(!cu || !cu.isRoot) return;
+  const layer = document.getElementById('orderListModalLayer');
+  const rows = buildOrderListData();
+
+  let groupedHtml = '';
+  if(rows.length === 0){
+    groupedHtml = '<p class="modal-desc">Nothing is short right now — every item with a required amount set currently has enough in stock.</p>';
+  } else {
+    let currentCat = null;
+    rows.forEach(r => {
+      if(r.cat !== currentCat){
+        currentCat = r.cat;
+        groupedHtml += `<div style="font-weight:600;color:var(--oak-dark);margin:14px 0 6px;font-size:12.5px;">${escapeHtml(currentCat)}</div>`;
+      }
+      groupedHtml += `<div style="display:flex;justify-content:space-between;gap:10px;padding:5px 0;border-bottom:1px solid var(--line);font-size:13.5px;">
+        <span>${escapeHtml(r.desc)}${r.size ? ' — ' + escapeHtml(r.size) : ''} <span style="color:var(--ink-soft);">(have ${r.have}, need ${r.required})</span></span>
+        <span style="font-weight:600;color:var(--danger);white-space:nowrap;">order ${r.missing}</span>
+      </div>`;
+    });
+  }
+
+  layer.innerHTML = `<div class="modal-overlay" id="orderListOverlay">
+    <div class="modal" style="max-width:520px;">
+      <h3>Order list</h3>
+      <p class="modal-desc">Items below their required amount, based on the "Req." field root sets on each item.</p>
+      ${groupedHtml}
+      <div class="modal-actions">
+        <button class="modal-close" onclick="closeOrderList()">Close</button>
+        ${rows.length > 0 ? '<button class="add-btn" onclick="copyOrderList()">Copy list</button>' : ''}
+      </div>
+    </div>
+  </div>`;
+}
+
+function copyOrderList(){
+  const rows = buildOrderListData();
+  let currentCat = null;
+  let text = 'Order list\n';
+  rows.forEach(r => {
+    if(r.cat !== currentCat){
+      currentCat = r.cat;
+      text += `\n${currentCat}\n`;
+    }
+    text += `${r.desc}${r.size ? ' — ' + r.size : ''}: order ${r.missing} (have ${r.have}, need ${r.required})\n`;
+  });
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).catch(() => {});
+  }
+}
+
+function closeOrderList(){
+  document.getElementById('orderListModalLayer').innerHTML = '';
+}
 
 function openManageUsers(editId){
   if(!can('manageUsers')) return;
