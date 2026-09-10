@@ -12,6 +12,25 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Oak Stock">
+<!-- Firebase Realtime Database — same project the dispatch app uses.
+     See the dispatch app's <head> for the full rationale on why this
+     replaced jsonbin.io on 2026-09-09. Compat SDK (global `firebase`
+     namespace) via plain <script> tags, same reasoning as there: no
+     bundler in this file, so no ES-module scoping headaches. -->
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-database-compat.js"></script>
+<script>
+  const firebaseConfig = {
+    apiKey: "AIzaSyCkoUkLIlxdxD2AAEpLGW4dzqkSeC5lVh0",
+    authDomain: "oak-joinery-stock-dispatch.firebaseapp.com",
+    databaseURL: "https://oak-joinery-stock-dispatch-default-rtdb.europe-west1.firebasedatabase.app",
+    projectId: "oak-joinery-stock-dispatch",
+    storageBucket: "oak-joinery-stock-dispatch.firebasestorage.app",
+    messagingSenderId: "538461584463",
+    appId: "1:538461584463:web:b84319c125e9bf9a47be3a"
+  };
+  firebase.initializeApp(firebaseConfig);
+</script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
 <style>
@@ -478,15 +497,14 @@
     <button class="ghost-btn" id="share-pdf-btn">Share PDF</button>
     <button class="ghost-btn" id="install-btn" style="display:none;">Install app</button>
     <button class="ghost-btn" id="order-list-btn" style="display:none;">Order list</button>
+    <button class="ghost-btn" id="cutting-list-btn" style="display:none;">Cutting list</button>
     <span class="ios-install-hint" id="ios-install-hint" style="display:none;">To install: tap Share, then "Add to Home Screen"</span>
   </div>
 
   <div class="sync-bar">
     <span class="sync-status" id="sync-status">Checking sync…</span>
     <span style="display:flex;gap:14px;">
-      <button class="sync-link" id="dispatch-link-btn">Link to dispatch app</button>
       <button class="sync-link" id="manage-users-btn">Manage users</button>
-      <button class="sync-link" id="sync-settings-btn">Sync across devices</button>
     </span>
   </div>
 
@@ -499,58 +517,6 @@
 
   <div id="list-root"></div>
 
-</div>
-
-<div id="sync-modal-overlay" class="modal-overlay" style="display:none;">
-  <div class="modal">
-    <h3>Sync across devices</h3>
-    <p class="modal-desc">Connect this file to one shared cloud store so the same stock list shows on every phone and laptop that opens it.</p>
-    <ol class="modal-steps">
-      <li>Create a free account at <a href="https://jsonbin.io" target="_blank" rel="noopener">jsonbin.io</a>.</li>
-      <li>In the dashboard, copy your API key (labelled <b>X-MASTER-KEY</b>).</li>
-      <li>Paste it below. <b>On your very first device</b>, leave "Bin ID" blank and click "Create shared store" — it'll fill in a Bin ID for you.</li>
-      <li>Copy that Bin ID (and the same API key) into this same screen on every other phone/laptop, then click "Connect".</li>
-    </ol>
-    <div class="field full">
-      <label for="sync-api-key">API key (X-Master-Key)</label>
-      <input type="text" id="sync-api-key" placeholder="$2b$10$...">
-    </div>
-    <div class="field full">
-      <label for="sync-bin-id">Bin ID <span style="font-weight:400;">(blank on first device only)</span></label>
-      <input type="text" id="sync-bin-id" placeholder="e.g. 66f2a1c4...">
-    </div>
-    <div class="modal-actions">
-      <button id="sync-create-btn" class="add-btn" style="background:var(--card);color:var(--oak-dark);border:1px solid var(--oak);">Create shared store</button>
-      <button id="sync-connect-btn" class="add-btn">Connect</button>
-    </div>
-    <p class="error-msg" id="sync-error"></p>
-    <button class="modal-close" id="sync-close-btn">Close</button>
-  </div>
-</div>
-
-<div id="dispatch-link-modal-overlay" class="modal-overlay" style="display:none;">
-  <div class="modal">
-    <h3>Link to dispatch app</h3>
-    <p class="modal-desc">Connect this stock list to your dispatch app's jsonbin store. This also makes logins shared: once linked, the same usernames and PINs from the dispatch app work here too, and "Mark built" can send an item straight into the dispatch app's Unfinished column.</p>
-    <ol class="modal-steps">
-      <li>Use the SAME jsonbin API key your dispatch app is connected with.</li>
-      <li>Open the dispatch app, click "Sync across devices" there, and copy its Bin ID (not this stock list's own Bin ID — a different one).</li>
-      <li>Paste both below and click Connect.</li>
-    </ol>
-    <div class="field full">
-      <label for="dispatch-link-api-key">API key (X-Master-Key)</label>
-      <input type="text" id="dispatch-link-api-key" placeholder="$2b$10$...">
-    </div>
-    <div class="field full">
-      <label for="dispatch-link-bin-id">Dispatch app's Bin ID</label>
-      <input type="text" id="dispatch-link-bin-id" placeholder="e.g. 66f2a1c4...">
-    </div>
-    <div class="modal-actions">
-      <button id="dispatch-link-connect-btn" class="add-btn">Connect</button>
-    </div>
-    <p class="error-msg" id="dispatch-link-error"></p>
-    <button class="modal-close" id="dispatch-link-close-btn">Close</button>
-  </div>
 </div>
 
 <div id="mark-built-modal-overlay" class="modal-overlay" style="display:none;">
@@ -578,9 +544,12 @@
 
 <div id="userModalLayer"></div>
 <div id="orderListModalLayer"></div>
+<div id="recipeModalLayer"></div>
+<div id="cuttingListModalLayer"></div>
 
 <script>
 const STORAGE_KEY = 'stock-items-v2';
+const RECIPES_STORAGE_KEY = 'stock-recipes-v1';
 
 const seedItems = [
   // Wet Bar
@@ -642,30 +611,18 @@ const seedItems = [
   {cat:'Aluminum', desc:'Aluminum 38mm', size:'', qty:481, qtyL:null, notes:''}
 ];
 
-const CAT_ORDER = ['Wet Bar', 'TV Panels', 'Headboards'];
-
 let items = [];
+// A "recipe" defines, per category, what components (and how many of
+// each) it takes to build ONE unit of that category, plus how many
+// units root currently wants to build — per user request ("wet-bar: 1
+// top, 1 bottom, 1 side, 1 side, 1 divider, 1 divider, 1 cleats, 1
+// rail to build this unit"). Shape:
+// { catName: { units: N, components: [ {itemId, desc, size, qtyPerUnit}, ... ] } }
+// desc/size are cached alongside itemId so the Cutting List can still
+// show a sensible name if the underlying item is ever deleted/renamed;
+// itemId is the source of truth for matching current stock levels.
+let recipes = {};
 let editingId = null;
-
-const SYNC_CONFIG_KEY = 'stock-sync-config-v1';
-let syncConfig = null;
-let syncTimer = null;
-
-// Baked-in credentials for this app's OWN item-list shared store — same
-// idea as DEFAULT_DISPATCH_LINK below: bake the API key and Bin ID into
-// the app itself so every device auto-connects to the same shared stock
-// list on first load, instead of someone having to manually paste these
-// into "Sync across devices" on every single device/install. Per user
-// request: "not to add the api and bin to every app that gets installed".
-// Same caveat as elsewhere: visible in page source, not a real secret,
-// fine for a single-board internal staff tool. This is a DIFFERENT bin
-// from DEFAULT_DISPATCH_LINK's manifest bin — that one holds the
-// dispatch app's board (users + dispatch items), this one holds just
-// this app's own stock items list.
-const DEFAULT_SYNC_CONFIG = {
-  apiKey: '$2a$10$l6JD2KxQKAU7bhxR7mJFAOtoHFmgMxKgUWE0rHo7zLCpC3OzRFzim',
-  binId: '6aa004d9ac6210605ab383a4'
-};
 
 // Users & permissions — client-side only, NOT real security (see
 // dispatch app's dev notes for the full caveat — same limitation
@@ -680,7 +637,10 @@ function defaultPermissions(){
     removeItems: false, // Delete button
     markBuilt: false,   // "Mark built" -> sends to dispatch app
     exportData: false,  // Print / Share PDF
-    manageSync: false,  // Sync across devices + Link to dispatch app
+    manageSync: false,  // No longer gates anything (sync has no settings
+                         // left to configure since the Firebase migration
+                         // — kept as a field only so old user records
+                         // don't need migrating)
     manageUsers: false  // Add/edit/remove users (root always has this)
   };
 }
@@ -694,6 +654,11 @@ function can(key){
   if(!u) return false;
   if(u.isRoot) return true;
   return !!(u.permissions && u.permissions[key]);
+}
+
+function currentUserIsRoot(){
+  const u = getCurrentUser();
+  return !!(u && u.isRoot);
 }
 
 async function hashPin(pin){
@@ -717,211 +682,128 @@ function resetIdleTimer(){
   window.addEventListener(evt, () => { if(currentUserId) resetIdleTimer(); }, { passive: true });
 });
 
-// Link to the dispatch app's jsonbin store — separate from this app's
-// own sync config above. Lets "Mark built" push a new Unfinished item
-// straight into the dispatch app's board, and shares logins.
-const DISPATCH_LINK_KEY = 'dispatch-link-config-v1';
-let dispatchLink = null;
+// --- Firebase Realtime Database sync (migrated from jsonbin.io on
+// 2026-09-09 — see the dispatch app's changelog for the full
+// rationale: jsonbin's free tier is a 10,000-request LIFETIME cap,
+// not daily, which real usage across both apps + multiple devices +
+// polling burned through in a single day. Firebase's free tier resets
+// DAILY (50k reads/20k writes) and supports genuine real-time
+// listeners instead of polling.) ---
+//
+// Two independent live paths in the SAME Firebase project the dispatch
+// app uses:
+//   'stockList'     — this app's own items[]/recipes{}
+//   'dispatchBoard' — the dispatch app's shared board; this app only
+//                     ever reads/writes the users[] and items[] fields
+//                     on it (for shared logins and "Mark built"
+//                     respectively) — never the whole object, so this
+//                     app can't clobber the dispatch app's notes/
+//                     itemTypes/etc the way the old jsonbin read-
+//                     modify-write (fetchDispatchBoard +
+//                     writeDispatchBoard) theoretically could if timed
+//                     badly.
+let firebaseStockRef = null;
+let firebaseStockFirstSnapshotReceived = false;
+let firebaseStockPushTimer = null;
+let firebaseDispatchBoardRef = null;
+let firebaseDispatchFirstSnapshotReceived = false;
+let dispatchBoardCache = { items: [], notes: [], users: [], nextNo: 1, itemTypes: [] };
+let firebaseConnected = false;
 
-// Baked-in credentials for the dispatch app's shared board, so this app
-// auto-connects on first load without anyone needing to open "Link to
-// dispatch app" and paste anything in — same idea as the dispatch app's
-// own DEFAULT_CLOUD_SYNC constant, same caveat: visible in page source,
-// not a real secret, fine for a single-board internal staff tool. If the
-// dispatch app's API key or Bin ID (the MANIFEST bin — see the chunked
-// read/write functions below) is ever rotated, update both here too.
-const DEFAULT_DISPATCH_LINK = {
-  apiKey: '$2a$10$l6JD2KxQKAU7bhxR7mJFAOtoHFmgMxKgUWE0rHo7zLCpC3OzRFzim',
-  binId: '6a9e72e8ffd5d16053e857ef'
-};
-
-function loadDispatchLink(){
-  try{
-    const raw = localStorage.getItem(DISPATCH_LINK_KEY);
-    dispatchLink = raw ? JSON.parse(raw) : null;
-  } catch(e){ dispatchLink = null; }
-  if(!dispatchLink || !dispatchLink.apiKey || !dispatchLink.binId){
-    // Nothing manually configured (or a previous bad/partial save) —
-    // fall back to the baked-in defaults so the app auto-links without
-    // any setup. Saved so it also shows correctly if the "Link to
-    // dispatch app" modal is ever opened, and so a manual override
-    // (a different Bin ID) still persists and takes precedence on the
-    // next load — this only fills the gap when nothing real is saved.
-    dispatchLink = { apiKey: DEFAULT_DISPATCH_LINK.apiKey, binId: DEFAULT_DISPATCH_LINK.binId };
-    saveDispatchLink(dispatchLink);
-  }
-}
-function saveDispatchLink(cfg){
-  dispatchLink = cfg;
-  try{ localStorage.setItem(DISPATCH_LINK_KEY, JSON.stringify(cfg)); } catch(e){}
-}
-
-function sleep(ms){ return new Promise(r => setTimeout(r, ms)); }
-
-// Same retry-on-429 wrapper as the dispatch app — jsonbin's free tier
-// rate-limits bursts of requests even within the generous total budget,
-// and reading/writing a chunked board can mean a dozen-plus requests.
-async function fetchWithRetry(url, opts, maxRetries){
-  maxRetries = maxRetries || 3;
-  for(let attempt = 0; attempt <= maxRetries; attempt++){
-    const res = await fetch(url, opts);
-    if(res.status !== 429) return res;
-    if(attempt === maxRetries) return res;
-    const retryAfterHeader = res.headers.get('Retry-After');
-    const waitMs = retryAfterHeader ? parseFloat(retryAfterHeader) * 1000 : Math.pow(2, attempt) * 1000;
-    await sleep(waitMs);
-  }
-}
-
-const DISPATCH_CHUNK_SIZE = 60000;
-
-// The dispatch app's binId is a MANIFEST bin — {manifest:true,
-// chunkBinIds:[...], chunkCount, updatedAt} — not the actual board data,
-// which is split across separate chunk bins referenced by chunkBinIds
-// (added there once its board data grew past jsonbin's 100KB per-record
-// free-tier cap). This mirrors the dispatch app's own pullFromCloud so
-// this app reads the SAME real board shape instead of getting an empty
-// {users:undefined, items:undefined} from the manifest wrapper directly.
-async function fetchDispatchBoard(){
-  const manifestRes = await fetchWithRetry('https://api.jsonbin.io/v3/b/' + dispatchLink.binId + '/latest', {
-    headers: { 'X-Master-Key': dispatchLink.apiKey }
-  });
-  if(!manifestRes.ok) throw new Error('HTTP ' + manifestRes.status);
-  const manifestData = await manifestRes.json();
-  const chunkBinIds = Array.isArray(manifestData.record.chunkBinIds) ? manifestData.record.chunkBinIds : [];
-  if(chunkBinIds.length === 0) return { items: [], notes: [], users: [], nextNo: 1, itemTypes: [] };
-
-  let full = '';
-  for(const chunkId of chunkBinIds){
-    const chunkRes = await fetchWithRetry('https://api.jsonbin.io/v3/b/' + chunkId + '/latest', {
-      headers: { 'X-Master-Key': dispatchLink.apiKey }
+function initFirebaseStockSync(){
+  return new Promise((resolve) => {
+    firebase.database().ref('.info/connected').on('value', (snap) => {
+      firebaseConnected = snap.val() === true;
+      setSyncStatus(firebaseConnected ? 'Synced (live)' : 'Reconnecting…', !firebaseConnected);
     });
-    if(!chunkRes.ok) throw new Error('HTTP ' + chunkRes.status);
-    const chunkData = await chunkRes.json();
-    full += chunkData.record.data || '';
-    await sleep(350); // pace requests, same reasoning as fetchWithRetry above
-  }
-  return JSON.parse(full);
-}
 
-// Writes a full board object back using the SAME chunking scheme the
-// dispatch app's pushToCloud uses: re-chunks the whole board, PUTs into
-// existing chunk bins where possible (fewer stale bins, keeps the same
-// IDs), creates new ones if the board grew, deletes now-unused ones if
-// it shrank, then updates the manifest last. CRITICAL: never write
-// directly to dispatchLink.binId itself with a raw object — that bin
-// holds ONLY the manifest wrapper, and overwriting it with board data
-// directly would destroy chunkBinIds and orphan/break every real chunk,
-// exactly the kind of data-loss bug the dispatch app itself hit before
-// this was written this way from the start here.
-async function writeDispatchBoard(board){
-  let existingIds = [];
-  try{
-    const manifestRes = await fetchWithRetry('https://api.jsonbin.io/v3/b/' + dispatchLink.binId + '/latest', {
-      headers: { 'X-Master-Key': dispatchLink.apiKey }
+    firebaseStockRef = firebase.database().ref('stockList');
+    firebaseStockRef.on('value', (snapshot) => {
+      const remote = snapshot.val();
+      if(remote){
+        items = Array.isArray(remote.items) ? remote.items : items;
+        recipes = (remote.recipes && typeof remote.recipes === 'object') ? remote.recipes : recipes;
+        try{
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+          localStorage.setItem(RECIPES_STORAGE_KEY, JSON.stringify(recipes));
+        } catch(e){}
+        render();
+      }
+      if(!firebaseStockFirstSnapshotReceived){
+        firebaseStockFirstSnapshotReceived = true;
+        resolve();
+      }
+    }, () => {
+      // permission-denied or similar — don't hang load() forever waiting
+      if(!firebaseStockFirstSnapshotReceived){
+        firebaseStockFirstSnapshotReceived = true;
+        resolve();
+      }
     });
-    if(manifestRes.ok){
-      const manifestData = await manifestRes.json();
-      if(Array.isArray(manifestData.record.chunkBinIds)) existingIds = manifestData.record.chunkBinIds;
-    }
-  } catch(e){ /* fall through and just create fresh chunk bins */ }
-
-  const full = JSON.stringify(board);
-  const chunks = [];
-  for(let i = 0; i < full.length; i += DISPATCH_CHUNK_SIZE) chunks.push(full.slice(i, i + DISPATCH_CHUNK_SIZE));
-  if(chunks.length === 0) chunks.push('');
-
-  const newChunkIds = [];
-  for(let i = 0; i < chunks.length; i++){
-    const body = JSON.stringify({ data: chunks[i] });
-    if(existingIds[i]){
-      const res = await fetchWithRetry('https://api.jsonbin.io/v3/b/' + existingIds[i], {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json', 'X-Master-Key': dispatchLink.apiKey },
-        body
-      });
-      if(!res.ok) throw new Error('HTTP ' + res.status);
-      newChunkIds.push(existingIds[i]);
-    } else {
-      const res = await fetchWithRetry('https://api.jsonbin.io/v3/b', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Master-Key': dispatchLink.apiKey, 'X-Bin-Name': 'oak-joinery-dispatch-board-chunk-' + i },
-        body
-      });
-      if(!res.ok) throw new Error('HTTP ' + res.status);
-      const data = await res.json();
-      newChunkIds.push(data.metadata.id);
-    }
-    await sleep(350);
-  }
-
-  for(let i = chunks.length; i < existingIds.length; i++){
-    try{
-      await fetchWithRetry('https://api.jsonbin.io/v3/b/' + existingIds[i], {
-        method: 'DELETE',
-        headers: { 'X-Master-Key': dispatchLink.apiKey }
-      });
-      await sleep(350);
-    } catch(e){}
-  }
-
-  const manifestPutRes = await fetchWithRetry('https://api.jsonbin.io/v3/b/' + dispatchLink.binId, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json', 'X-Master-Key': dispatchLink.apiKey },
-    body: JSON.stringify({ manifest: true, chunkBinIds: newChunkIds, chunkCount: chunks.length, updatedAt: Date.now() })
   });
-  if(!manifestPutRes.ok) throw new Error('HTTP ' + manifestPutRes.status);
 }
 
-// Users now live on the dispatch app's shared board (same bin as
-// dispatchLink), so logins match between the two apps. Local
-// USERS_STORAGE_KEY is kept only as an offline fallback cache.
-async function pullUsersFromDispatch(){
-  if(!dispatchLink || !dispatchLink.apiKey || !dispatchLink.binId) return false;
-  try{
-    const board = await fetchDispatchBoard();
-    users = Array.isArray(board.users) ? board.users : [];
-    saveUsersLocal();
-    return true;
-  } catch(e){
-    return false;
-  }
+function pushStockToFirebase(){
+  if(!firebaseStockRef) return;
+  firebaseStockRef.set({ items, recipes }).catch(() => {});
 }
 
-async function pushUsersToDispatch(){
-  if(!dispatchLink || !dispatchLink.apiKey || !dispatchLink.binId){
-    saveUsersLocal();
-    return false;
-  }
-  try{
-    const board = await fetchDispatchBoard(); // read latest first — don't clobber items/notes/etc that changed since our last pull
-    board.users = users;
-    await writeDispatchBoard(board);
-    saveUsersLocal();
-    return true;
-  } catch(e){
-    saveUsersLocal();
-    return false;
-  }
+// Debounces rapid-fire saves into one write ~800ms after the last
+// change, same spirit as the old jsonbin-era debounce but without any
+// rate-limit concerns to justify it anymore — this is really just to
+// avoid a write per keystroke while someone's typing.
+function queuePushStockToFirebase(){
+  clearTimeout(firebaseStockPushTimer);
+  firebaseStockPushTimer = setTimeout(pushStockToFirebase, 800);
 }
 
-// Call this instead of save()/saveUsersLocal() anywhere the `users`
-// array itself changes (create/edit/delete/root-setup) — routes the
-// write to the shared dispatch board when linked, local cache otherwise.
+function initFirebaseDispatchLink(){
+  return new Promise((resolve) => {
+    firebaseDispatchBoardRef = firebase.database().ref('dispatchBoard');
+    firebaseDispatchBoardRef.on('value', (snapshot) => {
+      const remote = snapshot.val();
+      if(remote){
+        dispatchBoardCache = remote;
+        users = Array.isArray(remote.users) ? remote.users : users;
+        saveUsersLocal();
+        renderUserBadge();
+        applyPermissionsToUi();
+        render();
+      }
+      if(!firebaseDispatchFirstSnapshotReceived){
+        firebaseDispatchFirstSnapshotReceived = true;
+        resolve();
+      }
+    }, () => {
+      if(!firebaseDispatchFirstSnapshotReceived){
+        firebaseDispatchFirstSnapshotReceived = true;
+        resolve();
+      }
+    });
+  });
+}
+
+// Writes the current users[] straight to the dispatch board's users
+// path only (a partial-path write via .child('users')) — never the
+// whole board object, so this can never clobber the dispatch app's own
+// items/notes/etc no matter how it's timed.
 async function saveUsers(){
-  if(dispatchLink && dispatchLink.apiKey && dispatchLink.binId){
-    await pushUsersToDispatch();
-  } else {
-    saveUsersLocal();
-  }
+  saveUsersLocal();
+  if(!firebaseDispatchBoardRef) return;
+  try{
+    await firebaseDispatchBoardRef.child('users').set(users);
+  } catch(e){}
 }
 
+// Appends a new Unfinished item to the dispatch board. Reads from the
+// live-cached dispatchBoardCache (kept fresh by the listener above —
+// normally milliseconds old, not the multi-second gap a fresh jsonbin
+// fetch used to have) then writes back just the items path.
 async function sendToDispatchUnfinished(type, qty, ref){
-  if(!dispatchLink || !dispatchLink.apiKey || !dispatchLink.binId){
-    throw new Error('Dispatch app link not set up');
+  if(!firebaseDispatchBoardRef){
+    throw new Error('Not connected to the dispatch board yet — try again in a moment.');
   }
-  const board = await fetchDispatchBoard();
-  const dispatchItems = Array.isArray(board.items) ? board.items : [];
+  const dispatchItems = Array.isArray(dispatchBoardCache.items) ? dispatchBoardCache.items.slice() : [];
   dispatchItems.push({
     id: uid(),
     type, qty, ref: ref || '',
@@ -931,8 +813,7 @@ async function sendToDispatchUnfinished(type, qty, ref){
     dispatchedDate: null,
     noteId: null
   });
-  board.items = dispatchItems;
-  await writeDispatchBoard(board);
+  await firebaseDispatchBoardRef.child('items').set(dispatchItems);
 }
 
 function uid(){ return 'i' + Date.now() + Math.random().toString(36).slice(2,7); }
@@ -954,27 +835,6 @@ function naturalCompare(a, b){
   return ax.length - bx.length;
 }
 
-function loadSyncConfig(){
-  try{
-    const raw = localStorage.getItem(SYNC_CONFIG_KEY);
-    syncConfig = raw ? JSON.parse(raw) : null;
-  } catch(e){ syncConfig = null; }
-  if(!syncConfig || !syncConfig.apiKey || !syncConfig.binId){
-    // Nothing manually configured — fall back to the baked-in defaults
-    // so this device auto-joins the shared stock list without any setup.
-    // A manual override (a different Bin ID, if ever needed) still
-    // persists and takes precedence on the next load — this only fills
-    // the gap when nothing real is saved yet.
-    syncConfig = { apiKey: DEFAULT_SYNC_CONFIG.apiKey, binId: DEFAULT_SYNC_CONFIG.binId };
-    saveSyncConfig(syncConfig);
-  }
-}
-
-function saveSyncConfig(cfg){
-  syncConfig = cfg;
-  try{ localStorage.setItem(SYNC_CONFIG_KEY, JSON.stringify(cfg)); } catch(e){}
-}
-
 function setSyncStatus(text, isError){
   const el = document.getElementById('sync-status');
   if(!el) return;
@@ -992,89 +852,7 @@ function loadUsersLocal(){
   } catch(e){ users = []; }
 }
 
-async function pullFromCloud(showBusy){
-  if(!syncConfig || !syncConfig.apiKey || !syncConfig.binId) return false;
-  try{
-    if(showBusy) setSyncStatus('Syncing…');
-    const res = await fetchWithRetry('https://api.jsonbin.io/v3/b/' + syncConfig.binId + '/latest', {
-      headers: { 'X-Master-Key': syncConfig.apiKey }
-    });
-    if(!res.ok) throw new Error('HTTP ' + res.status);
-    const data = await res.json();
-    const record = data.record;
-    if(Array.isArray(record)){
-      items = record; // legacy shape — bin predates users, nothing to merge
-    } else if(record && Array.isArray(record.items)){
-      items = record.items;
-    }
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
-    render();
-    renderUserBadge();
-    applyPermissionsToUi();
-    setSyncStatus('Synced — last update ' + new Date().toLocaleTimeString());
-    return true;
-  } catch(e){
-    setSyncStatus('Sync error — showing last saved copy on this device', true);
-    return false;
-  }
-}
-
-async function pushToCloud(){
-  if(!syncConfig || !syncConfig.apiKey || !syncConfig.binId) return false;
-  try{
-    const res = await fetchWithRetry('https://api.jsonbin.io/v3/b/' + syncConfig.binId, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json', 'X-Master-Key': syncConfig.apiKey },
-      body: JSON.stringify({ items })
-    });
-    if(!res.ok) throw new Error('HTTP ' + res.status);
-    setSyncStatus('Synced — last update ' + new Date().toLocaleTimeString());
-    return true;
-  } catch(e){
-    setSyncStatus('Sync error — saved locally only on this device', true);
-    return false;
-  }
-}
-
-async function createSharedBin(apiKey){
-  const res = await fetchWithRetry('https://api.jsonbin.io/v3/b', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Master-Key': apiKey, 'X-Bin-Name': 'oak-joinery-stock' },
-    body: JSON.stringify({ items })
-  });
-  if(!res.ok) throw new Error('HTTP ' + res.status);
-  const data = await res.json();
-  return data.metadata.id;
-}
-
-function startSyncPolling(){
-  if(syncTimer) clearInterval(syncTimer);
-  if(!syncConfig) return;
-  syncTimer = setInterval(() => pullFromCloud(false), 120000); // every 2 minutes
-}
-
-let dispatchUsersPollTimer = null;
-function startDispatchUsersPolling(){
-  if(dispatchUsersPollTimer) clearInterval(dispatchUsersPollTimer);
-  if(!dispatchLink) return;
-  dispatchUsersPollTimer = setInterval(() => {
-    // BUGFIX 2026-09-08: originally only called renderUserBadge() +
-    // applyPermissionsToUi() here — neither of those touches the per-item
-    // action buttons (edit/mark built/delete), which are built inside
-    // render()'s loop via can(...) checks. That meant a permission change
-    // made on the dispatch app while this device sat idle would silently
-    // never show up here until something else happened to trigger a
-    // render() (e.g. editing an item) — from this device's point of view
-    // it looked like the permission just "wasn't pulling through" even
-    // though the pull itself was working correctly. render() now runs
-    // every poll too so this reflects live.
-    pullUsersFromDispatch().then(() => { renderUserBadge(); applyPermissionsToUi(); render(); });
-  }, 120000); // every 2 minutes — keeps shared logins fresh across devices without needing a manual refresh
-}
-
 async function load(){
-  loadSyncConfig();
-  loadDispatchLink();
   loadUsersLocal();
   try{
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -1083,37 +861,29 @@ async function load(){
       items = migrateHandedSplit(items);
     } else {
       items = seedItems.map(it => ({...it, id: uid()}));
-      await save();
     }
   } catch(e){
     items = seedItems.map(it => ({...it, id: uid()}));
-    try{ await save(); } catch(e2){}
   }
+  try{
+    const rawRecipes = localStorage.getItem(RECIPES_STORAGE_KEY);
+    recipes = rawRecipes ? JSON.parse(rawRecipes) : {};
+  } catch(e){ recipes = {}; }
   render();
   checkForRecoverableData();
 
-  if(syncConfig && syncConfig.apiKey && syncConfig.binId){
-    document.getElementById('sync-api-key').value = syncConfig.apiKey;
-    document.getElementById('sync-bin-id').value = syncConfig.binId;
-    await pullFromCloud(true);
-    startSyncPolling();
-  } else {
-    setSyncStatus('Not connected — this device only');
-  }
-
-  if(dispatchLink){
-    document.getElementById('dispatch-link-api-key').value = dispatchLink.apiKey || '';
-    document.getElementById('dispatch-link-bin-id').value = dispatchLink.binId || '';
-    await pullUsersFromDispatch(); // same usernames/PINs as the dispatch app
-    render(); // BUGFIX 2026-09-08: the first render() above (before this
-              // pull) used whatever permissions were in the local cache —
-              // if root had just granted a new permission (e.g. markBuilt)
-              // on the dispatch app, this device wouldn't show it until
-              // some unrelated action happened to call render() again.
-              // Re-rendering here means a fresh page load always reflects
-              // the real, current permissions instead of a stale cache.
-    startDispatchUsersPolling();
-  }
+  // Firebase is baked into this file (see <head>) so every device
+  // connects automatically to both the stock list's own live data AND
+  // the dispatch app's shared board — no API key/Bin ID to enter, no
+  // "Sync across devices" or "Link to dispatch app" setup screens
+  // needed anymore. Both listeners resolve their promise on the first
+  // snapshot (even if empty), so by the time checkLogin() runs, users[]
+  // is always genuinely live rather than a possibly-stale local cache.
+  setSyncStatus('Connecting…');
+  await Promise.all([
+    initFirebaseStockSync(),
+    initFirebaseDispatchLink()
+  ]);
 
   await checkLogin();
 }
@@ -1173,13 +943,12 @@ function migrateHandedSplit(list){
 async function save(){
   try{
     localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+    localStorage.setItem(RECIPES_STORAGE_KEY, JSON.stringify(recipes));
   } catch(e){
     console.error('Storage error', e);
   }
   saveUsersLocal();
-  if(syncConfig && syncConfig.apiKey && syncConfig.binId){
-    await pushToCloud();
-  }
+  queuePushStockToFirebase();
 }
 
 function render(){
@@ -1214,10 +983,10 @@ function render(){
   });
 
   root.innerHTML = '';
-  const orderedCats = [
-    ...CAT_ORDER.filter(c => groups[c]),
-    ...Object.keys(groups).filter(c => !CAT_ORDER.includes(c))
-  ];
+  // Per user request: category headers now sort alphabetically too
+  // (previously CAT_ORDER pinned "Wet Bar"/"TV Panels"/"Headboards" to
+  // the front regardless of alphabetical position).
+  const orderedCats = Object.keys(groups).sort((a, b) => naturalCompare(a, b));
   orderedCats.forEach(catName=>{
     const catDiv = document.createElement('div');
     catDiv.className = 'category';
@@ -1244,6 +1013,16 @@ function render(){
       renameBtn.textContent = 'rename';
       renameBtn.onclick = () => renameCategory(catName);
       left.appendChild(renameBtn);
+    }
+    // Opens the recipe editor for this category — root-only, per user
+    // request ("wet-bar: 1 top, 1 bottom, 1 side... to build this
+    // unit"). See openRecipeEditor/buildCuttingListData below.
+    if(currentUserIsRoot()){
+      const recipeBtn = document.createElement('button');
+      recipeBtn.className = 'cat-rename-btn';
+      recipeBtn.textContent = 'recipe';
+      recipeBtn.onclick = () => openRecipeEditor(catName);
+      left.appendChild(recipeBtn);
     }
     head.appendChild(left);
 
@@ -1533,8 +1312,8 @@ async function confirmMarkBuilt(){
   const errEl = document.getElementById('mark-built-error');
   errEl.style.display = 'none';
   if(!it) return;
-  if(!dispatchLink || !dispatchLink.apiKey || !dispatchLink.binId){
-    errEl.textContent = 'Set up "Link to dispatch app" first.';
+  if(!firebaseDispatchBoardRef){
+    errEl.textContent = 'Not connected to the dispatch board yet — check your connection and try again.';
     errEl.style.display = 'block';
     return;
   }
@@ -1596,109 +1375,9 @@ document.getElementById('in-desc').addEventListener('keydown', e=>{
   if(e.key === 'Enter'){ e.preventDefault(); handleAdd(); }
 });
 
-document.getElementById('sync-settings-btn').addEventListener('click', () => {
-  if(!can('manageSync')) return;
-  document.getElementById('sync-error').style.display = 'none';
-  if(syncConfig){
-    document.getElementById('sync-api-key').value = syncConfig.apiKey || '';
-    document.getElementById('sync-bin-id').value = syncConfig.binId || '';
-  }
-  document.getElementById('sync-modal-overlay').style.display = 'flex';
-});
-document.getElementById('sync-close-btn').addEventListener('click', () => {
-  document.getElementById('sync-modal-overlay').style.display = 'none';
-});
-document.getElementById('sync-modal-overlay').addEventListener('click', (e) => {
-  if(e.target.id === 'sync-modal-overlay') document.getElementById('sync-modal-overlay').style.display = 'none';
-});
-
-document.getElementById('sync-create-btn').addEventListener('click', async () => {
-  const apiKey = document.getElementById('sync-api-key').value.trim();
-  const errEl = document.getElementById('sync-error');
-  const btn = document.getElementById('sync-create-btn');
-  errEl.style.display = 'none';
-  if(!apiKey){
-    errEl.textContent = 'Enter your API key first.';
-    errEl.style.display = 'block';
-    return;
-  }
-  btn.textContent = 'Creating…';
-  btn.disabled = true;
-  try{
-    const binId = await createSharedBin(apiKey);
-    saveSyncConfig({apiKey, binId});
-    document.getElementById('sync-bin-id').value = binId;
-    setSyncStatus('Connected — copy this Bin ID to your other devices');
-    startSyncPolling();
-  } catch(e){
-    errEl.textContent = 'Could not create a shared store — check the API key and try again.';
-    errEl.style.display = 'block';
-  } finally {
-    btn.textContent = 'Create shared store';
-    btn.disabled = false;
-  }
-});
-
-document.getElementById('sync-connect-btn').addEventListener('click', async () => {
-  const apiKey = document.getElementById('sync-api-key').value.trim();
-  const binId = document.getElementById('sync-bin-id').value.trim();
-  const errEl = document.getElementById('sync-error');
-  const btn = document.getElementById('sync-connect-btn');
-  errEl.style.display = 'none';
-  if(!apiKey || !binId){
-    errEl.textContent = 'Enter both the API key and the Bin ID.';
-    errEl.style.display = 'block';
-    return;
-  }
-  btn.textContent = 'Connecting…';
-  btn.disabled = true;
-  saveSyncConfig({apiKey, binId});
-  const ok = await pullFromCloud(true);
-  btn.textContent = 'Connect';
-  btn.disabled = false;
-  if(ok){
-    startSyncPolling();
-    document.getElementById('sync-modal-overlay').style.display = 'none';
-  } else {
-    errEl.textContent = 'Could not connect — check the API key and Bin ID and try again.';
-    errEl.style.display = 'block';
-  }
-});
-
-window.addEventListener('focus', () => { if(syncConfig) pullFromCloud(false); });
-window.addEventListener('focus', () => { if(dispatchLink) pullUsersFromDispatch().then(() => { renderUserBadge(); applyPermissionsToUi(); render(); }); }); // render() added 2026-09-08, same reasoning as startDispatchUsersPolling above
-
-document.getElementById('dispatch-link-btn').addEventListener('click', () => {
-  if(!can('manageSync')) return;
-  document.getElementById('dispatch-link-error').style.display = 'none';
-  if(dispatchLink){
-    document.getElementById('dispatch-link-api-key').value = dispatchLink.apiKey || '';
-    document.getElementById('dispatch-link-bin-id').value = dispatchLink.binId || '';
-  }
-  document.getElementById('dispatch-link-modal-overlay').style.display = 'flex';
-});
-document.getElementById('dispatch-link-close-btn').addEventListener('click', () => {
-  document.getElementById('dispatch-link-modal-overlay').style.display = 'none';
-});
-document.getElementById('dispatch-link-modal-overlay').addEventListener('click', (e) => {
-  if(e.target.id === 'dispatch-link-modal-overlay') document.getElementById('dispatch-link-modal-overlay').style.display = 'none';
-});
-document.getElementById('dispatch-link-connect-btn').addEventListener('click', () => {
-  const apiKey = document.getElementById('dispatch-link-api-key').value.trim();
-  const binId = document.getElementById('dispatch-link-bin-id').value.trim();
-  const errEl = document.getElementById('dispatch-link-error');
-  errEl.style.display = 'none';
-  if(!apiKey || !binId){
-    errEl.textContent = 'Enter both the API key and the dispatch app\'s Bin ID.';
-    errEl.style.display = 'block';
-    return;
-  }
-  saveDispatchLink({ apiKey, binId });
-  document.getElementById('dispatch-link-modal-overlay').style.display = 'none';
-});
-
 document.getElementById('print-btn').addEventListener('click', () => { if(can('exportData')) window.print(); });
 document.getElementById('order-list-btn').addEventListener('click', openOrderList);
+document.getElementById('cutting-list-btn').addEventListener('click', openCuttingList);
 
 function buildStockPdfBlob(){
   const { jsPDF } = window.jspdf;
@@ -1725,10 +1404,7 @@ function buildStockPdfBlob(){
     if(!groups[key]) groups[key] = [];
     groups[key].push(it);
   });
-  const orderedCats = [
-    ...CAT_ORDER.filter(c => groups[c]),
-    ...Object.keys(groups).filter(c => !CAT_ORDER.includes(c))
-  ];
+  const orderedCats = Object.keys(groups).sort((a, b) => naturalCompare(a, b));
 
   let y = 54;
   orderedCats.forEach(catName=>{
@@ -1981,11 +1657,14 @@ function applyPermissionsToUi(){
   set('add-card', can('addItems'));
   set('print-btn', can('exportData'));
   set('share-pdf-btn', can('exportData'));
-  set('sync-settings-btn', can('manageSync'));
-  set('dispatch-link-btn', can('manageSync'));
+  // sync-settings-btn/dispatch-link-btn removed 2026-09-09 — nothing
+  // left to configure for either since the Firebase migration; sync
+  // status is now a plain read-only indicator (sync-status span),
+  // visible to everyone.
   set('manage-users-btn', can('manageUsers'));
   const cu = getCurrentUser();
   set('order-list-btn', !!(cu && cu.isRoot));
+  set('cutting-list-btn', !!(cu && cu.isRoot));
   render();
 }
 
@@ -1994,7 +1673,7 @@ const PERMISSION_LABELS = [
   ['removeItems', 'Remove items'],
   ['markBuilt', 'Mark built (sends to dispatch app)'],
   ['exportData', 'Print / Share PDF'],
-  ['manageSync', 'Manage sync & dispatch app link'],
+  ['manageSync', 'Manage Google Drive settings (dispatch app)'],
   ['manageUsers', 'Manage users']
 ];
 
@@ -2074,6 +1753,192 @@ function copyOrderList(){
 
 function closeOrderList(){
   document.getElementById('orderListModalLayer').innerHTML = '';
+}
+
+// Recipe editor — lets root define what components (and how many of
+// each) go into ONE unit of a category, plus how many units are
+// currently wanted, so buildCuttingListData() can work out shortfalls.
+// Per user request: "wet-bar: 1 top, 1 bottom, 1 side, 1 side, 1
+// divider, 1 divider, 1 cleats, 1 rail to build this unit — calculate
+// what will be short and put that on a cutting list."
+function itemOptionsHtml(selectedId){
+  return items
+    .slice()
+    .sort((a, b) => naturalCompare((a.cat||'')+' '+a.desc+' '+(a.size||''), (b.cat||'')+' '+b.desc+' '+(b.size||'')))
+    .map(it => `<option value="${it.id}" ${it.id === selectedId ? 'selected' : ''}>${escapeHtml((it.cat && it.cat.trim()) ? it.cat.trim() : 'Uncategorised')} — ${escapeHtml(it.desc)}${it.size ? ' (' + escapeHtml(it.size) + ')' : ''}</option>`)
+    .join('');
+}
+
+function recipeRowHtml(component){
+  const comp = component || { itemId: (items[0] && items[0].id) || '', qtyPerUnit: 1 };
+  return `<div class="recipe-row" style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
+    <select class="recipe-item-select" style="flex:1;">${itemOptionsHtml(comp.itemId)}</select>
+    <input type="number" class="recipe-qty-input" min="1" value="${comp.qtyPerUnit || 1}" style="width:60px;text-align:center;">
+    <button type="button" class="icon-btn del" onclick="this.closest('.recipe-row').remove()">remove</button>
+  </div>`;
+}
+
+function openRecipeEditor(catName){
+  if(!currentUserIsRoot()) return;
+  if(items.length === 0){
+    alert('Add at least one stock item before building a recipe.');
+    return;
+  }
+  const layer = document.getElementById('recipeModalLayer');
+  const existing = recipes[catName] || { units: 1, components: [] };
+
+  layer.innerHTML = `<div class="modal-overlay" id="recipeOverlay">
+    <div class="modal" style="max-width:560px;">
+      <h3>Recipe: ${escapeHtml(catName)}</h3>
+      <p class="modal-desc">Define what it takes to build ONE unit of "${escapeHtml(catName)}", and how many units you currently want to build. The Cutting List will show what's short.</p>
+      <div class="field" style="margin-bottom:14px;max-width:160px;">
+        <label>Units to build</label>
+        <input type="number" id="recipeUnits" min="1" value="${existing.units || 1}">
+      </div>
+      <div id="recipeRows">
+        ${existing.components.length > 0 ? existing.components.map(recipeRowHtml).join('') : recipeRowHtml(null)}
+      </div>
+      <button type="button" class="ghost-btn" id="recipeAddRowBtn" style="margin-bottom:14px;">+ Add component</button>
+      <p class="error-msg" id="recipeErr" style="display:none;"></p>
+      <div class="modal-actions">
+        <button class="modal-close" id="recipeCloseBtn">Close</button>
+        ${existing.components.length > 0 ? '<button class="ghost-btn" id="recipeDeleteBtn" style="border-color:var(--danger);color:var(--danger);">Delete recipe</button>' : ''}
+        <button class="add-btn" id="recipeSaveBtn">Save recipe</button>
+      </div>
+    </div>
+  </div>`;
+
+  // Attached via closures (not string-embedded onclick) so catName
+  // survives intact even if it contains an apostrophe or other
+  // HTML/JS-sensitive character.
+  document.getElementById('recipeAddRowBtn').onclick = () => {
+    document.getElementById('recipeRows').insertAdjacentHTML('beforeend', recipeRowHtml(null));
+  };
+  document.getElementById('recipeCloseBtn').onclick = closeRecipeEditor;
+  document.getElementById('recipeSaveBtn').onclick = () => saveRecipeForm(catName);
+  const deleteBtn = document.getElementById('recipeDeleteBtn');
+  if(deleteBtn) deleteBtn.onclick = () => deleteRecipe(catName);
+}
+
+async function saveRecipeForm(catName){
+  const units = parseInt(document.getElementById('recipeUnits').value, 10) || 1;
+  const rows = [...document.querySelectorAll('#recipeRows .recipe-row')];
+  if(rows.length === 0){
+    document.getElementById('recipeErr').textContent = 'Add at least one component.';
+    document.getElementById('recipeErr').style.display = 'block';
+    return;
+  }
+  const components = rows.map(row => {
+    const itemId = row.querySelector('.recipe-item-select').value;
+    const qtyPerUnit = Math.max(1, parseInt(row.querySelector('.recipe-qty-input').value, 10) || 1);
+    const it = items.find(i => i.id === itemId);
+    return { itemId, desc: it ? it.desc : '(deleted item)', size: it ? (it.size || '') : '', qtyPerUnit };
+  });
+  recipes[catName] = { units, components };
+  await save();
+  closeRecipeEditor();
+}
+
+async function deleteRecipe(catName){
+  if(!confirm(`Delete the recipe for "${catName}"?`)) return;
+  delete recipes[catName];
+  await save();
+  closeRecipeEditor();
+}
+
+function closeRecipeEditor(){
+  document.getElementById('recipeModalLayer').innerHTML = '';
+}
+
+// Cutting List: for every category with a recipe, multiplies each
+// component's qtyPerUnit by that recipe's "units to build", compares
+// against the component item's actual current stock (qty + qtyL), and
+// lists anything short — per user request ("the app calculate what
+// will be short from that and put that on a cutting list").
+function buildCuttingListData(){
+  const shortfalls = [];
+  Object.keys(recipes).forEach(catName => {
+    const recipe = recipes[catName];
+    if(!recipe || !recipe.units || !Array.isArray(recipe.components)) return;
+    recipe.components.forEach(comp => {
+      const it = items.find(i => i.id === comp.itemId);
+      const have = it ? (Number(it.qty) || 0) + (Number(it.qtyL) || 0) : 0;
+      const required = comp.qtyPerUnit * recipe.units;
+      const missing = required - have;
+      if(missing > 0){
+        shortfalls.push({
+          buildCat: catName,
+          desc: it ? it.desc : comp.desc,
+          size: it ? (it.size || '') : comp.size,
+          deleted: !it,
+          have, required, missing
+        });
+      }
+    });
+  });
+  shortfalls.sort((a, b) => naturalCompare(a.buildCat + ' ' + a.desc + ' ' + a.size, b.buildCat + ' ' + b.desc + ' ' + b.size));
+  return shortfalls;
+}
+
+function openCuttingList(){
+  if(!currentUserIsRoot()) return;
+  const layer = document.getElementById('cuttingListModalLayer');
+  const rows = buildCuttingListData();
+
+  let groupedHtml = '';
+  if(Object.keys(recipes).length === 0){
+    groupedHtml = '<p class="modal-desc">No recipes set up yet — click "recipe" next to a category heading to define one.</p>';
+  } else if(rows.length === 0){
+    groupedHtml = '<p class="modal-desc">Nothing to cut right now — every recipe\'s components are fully stocked for the units currently wanted.</p>';
+  } else {
+    let currentCat = null;
+    rows.forEach(r => {
+      if(r.buildCat !== currentCat){
+        currentCat = r.buildCat;
+        groupedHtml += `<div style="font-weight:600;color:var(--oak-dark);margin:14px 0 6px;font-size:12.5px;">To build: ${escapeHtml(currentCat)}</div>`;
+      }
+      groupedHtml += `<div style="display:flex;justify-content:space-between;gap:10px;padding:5px 0;border-bottom:1px solid var(--line);font-size:13.5px;">
+        <span>${escapeHtml(r.desc)}${r.size ? ' — ' + escapeHtml(r.size) : ''}${r.deleted ? ' <span style="color:var(--danger);">(item deleted)</span>' : ''} <span style="color:var(--ink-soft);">(have ${r.have}, need ${r.required})</span></span>
+        <span style="font-weight:600;color:var(--danger);white-space:nowrap;">cut ${r.missing}</span>
+      </div>`;
+    });
+  }
+
+  layer.innerHTML = `<div class="modal-overlay" id="cuttingListOverlay">
+    <div class="modal" style="max-width:520px;">
+      <h3>Cutting list</h3>
+      <p class="modal-desc">Components short of what's needed to build the units set in each category's recipe.</p>
+      ${groupedHtml}
+      <div class="modal-actions">
+        <button class="modal-close" id="cuttingListCloseBtn">Close</button>
+        ${rows.length > 0 ? '<button class="add-btn" id="cuttingListCopyBtn">Copy list</button>' : ''}
+      </div>
+    </div>
+  </div>`;
+
+  document.getElementById('cuttingListCloseBtn').onclick = closeCuttingList;
+  const copyBtn = document.getElementById('cuttingListCopyBtn');
+  if(copyBtn) copyBtn.onclick = copyCuttingList;
+}
+
+function copyCuttingList(){
+  const rows = buildCuttingListData();
+  let currentCat = null;
+  let text = 'Cutting list\n';
+  rows.forEach(r => {
+    if(r.buildCat !== currentCat){
+      currentCat = r.buildCat;
+      text += `\nTo build: ${currentCat}\n`;
+    }
+    text += `${r.desc}${r.size ? ' — ' + r.size : ''}: cut ${r.missing} (have ${r.have}, need ${r.required})\n`;
+  });
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).catch(() => {});
+  }
+}
+
+function closeCuttingList(){
+  document.getElementById('cuttingListModalLayer').innerHTML = '';
 }
 
 function openManageUsers(editId){
@@ -2157,7 +2022,17 @@ async function saveUserForm(editId){
     err.style.display = 'block';
     return;
   }
-  const permissions = defaultPermissions();
+  // FIXED 2026-09-09: previously always started from defaultPermissions()
+  // (all false) and only ever set the keys this app's own form shows
+  // checkboxes for — meaning editing a user here would silently wipe
+  // out any permission only the DISPATCH app's form knows about (e.g.
+  // moveItems, manageNotes, manageTypes, renameCategories), since
+  // permissions are now one shared object between the two apps. Now
+  // starts from the user's EXISTING permissions when editing (falling
+  // back to defaultPermissions() only for a brand-new user), so keys
+  // this form doesn't expose are preserved untouched.
+  const existingUser = editId ? users.find(u => u.id === editId) : null;
+  const permissions = existingUser ? {...defaultPermissions(), ...existingUser.permissions} : defaultPermissions();
   document.querySelectorAll('.permCheck').forEach(cb => { permissions[cb.dataset.key] = cb.checked; });
 
   if(editId){
