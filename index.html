@@ -33,6 +33,7 @@
 </script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
   :root{
     --paper:#1E1C18;
@@ -1856,8 +1857,8 @@ function openOrderList(){
       }
       groupedHtml += `<div style="padding:5px 0;border-bottom:1px solid var(--line);font-size:13.5px;">
         <div style="display:flex;justify-content:space-between;gap:10px;">
-          <span>${escapeHtml(r.desc)}${r.size ? ' — ' + escapeHtml(r.size) : ''}${r.deleted ? ' <span style="color:var(--danger);">(item deleted)</span>' : ''} <span style="color:var(--ink-soft);">(have ${r.have}, need ${r.required})</span></span>
-          <span style="font-weight:600;color:var(--danger);white-space:nowrap;">order ${r.missing}</span>
+          <span>${escapeHtml(r.desc)}${r.size ? ' — ' + escapeHtml(r.size) : ''}${r.deleted ? ' <span style="color:var(--danger);">(item deleted)</span>' : ''}</span>
+          <span style="font-weight:600;color:var(--danger);white-space:nowrap;">cut ${r.missing}</span>
         </div>
         ${r.notes ? `<div class="item-notes">${escapeHtml(r.notes)}</div>` : ''}
       </div>`;
@@ -1871,6 +1872,7 @@ function openOrderList(){
       ${groupedHtml}
       <div class="modal-actions">
         <button class="modal-close" onclick="closeOrderList()">Close</button>
+        ${rows.length > 0 ? '<button class="ghost-btn" onclick="exportOrderListToExcel()">Export to Excel</button>' : ''}
         ${rows.length > 0 ? '<button class="add-btn" onclick="copyOrderList()">Copy list</button>' : ''}
       </div>
     </div>
@@ -1886,11 +1888,36 @@ function copyOrderList(){
       currentCat = r.buildCat;
       text += `\nTo build: ${currentCat}\n`;
     }
-    text += `${r.desc}${r.size ? ' — ' + r.size : ''}: order ${r.missing} (have ${r.have}, need ${r.required})${r.notes ? ' — ' + r.notes : ''}\n`;
+    text += `${r.desc}${r.size ? ' — ' + r.size : ''}: cut ${r.missing}${r.notes ? ' — ' + r.notes : ''}\n`;
   });
   if(navigator.clipboard && navigator.clipboard.writeText){
     navigator.clipboard.writeText(text).catch(() => {});
   }
+}
+
+// Exports the current Order List shortfalls to a .xlsx file, one row
+// per component that's short, grouped visually by which category it's
+// needed to build — per user request ("i want it to export it to
+// excel").
+function exportOrderListToExcel(){
+  const rows = buildOrderListData();
+  if(rows.length === 0) return;
+  const sheetData = [['To build', 'Item', 'Size', 'Cut qty', 'Notes']];
+  rows.forEach(r => {
+    sheetData.push([
+      r.buildCat,
+      r.desc + (r.deleted ? ' (item deleted)' : ''),
+      r.size || '',
+      r.missing,
+      r.notes || ''
+    ]);
+  });
+  const ws = XLSX.utils.aoa_to_sheet(sheetData);
+  ws['!cols'] = [{wch:20}, {wch:32}, {wch:18}, {wch:10}, {wch:28}];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Order list');
+  const dateStr = new Date().toISOString().slice(0,10);
+  XLSX.writeFile(wb, `oak-joinery-order-list-${dateStr}.xlsx`);
 }
 
 function closeOrderList(){
