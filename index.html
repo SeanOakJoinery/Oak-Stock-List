@@ -250,6 +250,7 @@
   .item-desc.editable{cursor:pointer;border-bottom:1px dashed transparent;}
   .item-desc.editable:hover{border-bottom-color:var(--oak);color:var(--oak-dark);}
   .item-notes{font-size:12px;color:var(--ink-soft);margin-top:2px;}
+  .item-material{font-size:12px;color:var(--oak-dark);margin-top:2px;font-weight:600;}
   .item-size{
     font-family:"SF Mono",Consolas,Menlo,monospace;
     font-size:13.5px;
@@ -264,20 +265,6 @@
     white-space:nowrap;
   }
   .item-actions{display:flex;gap:6px;align-self:center;}
-  .item-row.has-required{grid-template-columns:1fr auto auto auto auto;}
-  .item-required{display:flex;flex-direction:column;align-items:center;gap:2px;align-self:center;}
-  .item-required label{font-size:10px;color:var(--ink-soft);text-transform:uppercase;letter-spacing:0.04em;}
-  .item-required input{
-    width:48px;
-    text-align:center;
-    font-size:13px;
-    padding:4px 2px;
-    border:1px solid var(--line-strong);
-    border-radius:6px;
-    background:var(--card);
-    color:var(--ink);
-  }
-  .item-required input.short{border-color:var(--danger);color:var(--danger);}
   .icon-btn{
     background:none;
     border:none;
@@ -458,8 +445,17 @@
         <input type="text" id="in-desc" placeholder="e.g. Back shelf, Cleats, TV panel chipboard">
       </div>
       <div class="field full">
-        <label for="in-size">Size</label>
-        <input type="text" id="in-size" class="size-input" placeholder="e.g. 2139 x 300">
+        <label for="in-size-length">Size — Length × Width × Thickness</label>
+        <div style="display:flex;gap:8px;">
+          <input type="text" id="in-size-length" class="size-input" placeholder="Length" style="flex:1;">
+          <input type="text" id="in-size-width" class="size-input" placeholder="Width" style="flex:1;">
+          <input type="text" id="in-size-thickness" class="size-input" placeholder="Thickness" style="flex:1;">
+        </div>
+      </div>
+      <div class="field full">
+        <label for="in-material">Material</label>
+        <input type="text" id="in-material" list="material-list" placeholder="e.g. White Oak, MDF, Aluminum, Marble">
+        <datalist id="material-list"></datalist>
       </div>
       <div class="field full checkbox-field">
         <label><input type="checkbox" id="in-handed"> Split quantity by Right / Left handed</label>
@@ -478,7 +474,7 @@
       </div>
       <div class="field full">
         <label for="in-notes">Notes</label>
-        <input type="text" id="in-notes" placeholder="optional — material, unfinished, offcut...">
+        <input type="text" id="in-notes" placeholder="optional — unfinished, offcut...">
       </div>
     </div>
     <button class="add-btn" id="add-btn">Add to stock list</button>
@@ -497,7 +493,6 @@
     <button class="ghost-btn" id="share-pdf-btn">Share PDF</button>
     <button class="ghost-btn" id="install-btn" style="display:none;">Install app</button>
     <button class="ghost-btn" id="order-list-btn" style="display:none;">Order list</button>
-    <button class="ghost-btn" id="cutting-list-btn" style="display:none;">Cutting list</button>
     <span class="ios-install-hint" id="ios-install-hint" style="display:none;">To install: tap Share, then "Add to Home Screen"</span>
   </div>
 
@@ -545,7 +540,6 @@
 <div id="userModalLayer"></div>
 <div id="orderListModalLayer"></div>
 <div id="recipeModalLayer"></div>
-<div id="cuttingListModalLayer"></div>
 
 <script>
 const STORAGE_KEY = 'stock-items-v2';
@@ -818,6 +812,28 @@ async function sendToDispatchUnfinished(type, qty, ref){
 
 function uid(){ return 'i' + Date.now() + Math.random().toString(36).slice(2,7); }
 
+// Size is stored as one combined string (e.g. "854 x 568 x 32") so all
+// existing sorting/search/display/order-list code keeps working
+// unchanged, but the Add/Edit form shows it as three fields — Length,
+// Width, Thickness — per user request ("in the size side i want
+// length width and thickness and it has to be divided by x").
+function splitSizeString(sizeStr){
+  if(!sizeStr) return { length: '', width: '', thickness: '' };
+  const parts = String(sizeStr).split(/x/i).map(p => p.trim());
+  return {
+    length: parts[0] !== undefined ? parts[0] : '',
+    width: parts[1] !== undefined ? parts[1] : '',
+    thickness: parts[2] !== undefined ? parts[2] : ''
+  };
+}
+function combineSizeParts(length, width, thickness){
+  return [length, width, thickness]
+    .map(p => (p || '').toString().trim())
+    .filter(p => p !== '')
+    .join(' x ');
+}
+
+
 // Natural/alphanumeric sort — see the identical helper in the dispatch
 // app for the full explanation. Same reasoning here: item descriptions
 // and sizes both contain embedded numbers ("Cleat", "1562 x 100 x 17")
@@ -957,7 +973,7 @@ function render(){
 
   const filtered = items.filter(it => {
     if(!searchVal) return true;
-    return (it.desc + ' ' + it.cat + ' ' + it.size + ' ' + it.notes).toLowerCase().includes(searchVal);
+    return (it.desc + ' ' + it.cat + ' ' + it.size + ' ' + it.notes + ' ' + (it.material||'')).toLowerCase().includes(searchVal);
   });
 
   document.getElementById('count-pill').textContent = items.length + ' item' + (items.length===1?'':'s');
@@ -968,6 +984,14 @@ function render(){
     const opt = document.createElement('option');
     opt.value = c;
     cats.appendChild(opt);
+  });
+
+  const materials = document.getElementById('material-list');
+  materials.innerHTML = '';
+  [...new Set(items.map(i=>i.material).filter(Boolean))].forEach(m=>{
+    const opt = document.createElement('option');
+    opt.value = m;
+    materials.appendChild(opt);
   });
 
   if(filtered.length === 0){
@@ -1016,7 +1040,7 @@ function render(){
     }
     // Opens the recipe editor for this category — root-only, per user
     // request ("wet-bar: 1 top, 1 bottom, 1 side... to build this
-    // unit"). See openRecipeEditor/buildCuttingListData below.
+    // unit"). See openRecipeEditor/buildOrderListData below.
     if(currentUserIsRoot()){
       const recipeBtn = document.createElement('button');
       recipeBtn.className = 'cat-rename-btn';
@@ -1055,6 +1079,12 @@ function render(){
       descEl.title = 'Click to edit';
       descEl.onclick = () => startEdit(it.id);
       main.appendChild(descEl);
+      if(it.material){
+        const materialEl = document.createElement('div');
+        materialEl.className = 'item-material';
+        materialEl.textContent = it.material;
+        main.appendChild(materialEl);
+      }
       if(it.notes){
         const notesEl = document.createElement('div');
         notesEl.className = 'item-notes';
@@ -1071,37 +1101,6 @@ function render(){
       qty.appendChild(buildStepper(it, 'qty', it.qtyL !== null && it.qtyL !== undefined ? 'R' : ''));
       if(it.qtyL !== null && it.qtyL !== undefined){
         qty.appendChild(buildStepper(it, 'qtyL', 'L'));
-      }
-
-      // Root-only "required" (par level) field, per user request: root
-      // sets how many of a part should be on hand; the app compares
-      // this against the actual qty to work out shortages for the
-      // Order List (see buildOrderList/openOrderList below). Hardcoded
-      // to isRoot specifically rather than a grantable permission —
-      // user said "only root users" for this one, unlike markBuilt/
-      // renameCategories which were explicitly asked to be per-person.
-      const currentUser = getCurrentUser();
-      let requiredEl = null;
-      if(currentUser && currentUser.isRoot){
-        requiredEl = document.createElement('div');
-        requiredEl.className = 'item-required';
-        const lab = document.createElement('label');
-        lab.textContent = 'Req.';
-        const totalQty = (Number(it.qty) || 0) + (Number(it.qtyL) || 0);
-        const inp = document.createElement('input');
-        inp.type = 'number';
-        inp.min = '0';
-        inp.value = (it.required === null || it.required === undefined) ? '' : it.required;
-        inp.placeholder = '0';
-        if(it.required && totalQty < Number(it.required)) inp.classList.add('short');
-        inp.onchange = async () => {
-          const v = parseInt(inp.value, 10);
-          it.required = (isNaN(v) || v <= 0) ? null : v;
-          await save();
-          render();
-        };
-        requiredEl.appendChild(lab);
-        requiredEl.appendChild(inp);
       }
 
       const actions = document.createElement('div');
@@ -1131,10 +1130,6 @@ function render(){
       row.appendChild(main);
       row.appendChild(size);
       row.appendChild(qty);
-      if(requiredEl){
-        row.classList.add('has-required');
-        row.appendChild(requiredEl);
-      }
       row.appendChild(actions);
       catDiv.appendChild(row);
     });
@@ -1199,7 +1194,11 @@ function startEdit(id){
   const handed = it.qtyL !== null && it.qtyL !== undefined;
   document.getElementById('in-cat').value = it.cat;
   document.getElementById('in-desc').value = it.desc;
-  document.getElementById('in-size').value = it.size;
+  const sizeParts = splitSizeString(it.size);
+  document.getElementById('in-size-length').value = sizeParts.length;
+  document.getElementById('in-size-width').value = sizeParts.width;
+  document.getElementById('in-size-thickness').value = sizeParts.thickness;
+  document.getElementById('in-material').value = it.material || '';
   document.getElementById('in-handed').checked = handed;
   document.getElementById('qty-single-field').style.display = handed ? 'none' : 'flex';
   document.getElementById('qty-r-field').style.display = handed ? 'flex' : 'none';
@@ -1243,7 +1242,11 @@ async function handleAdd(){
   if(!can('addItems')) return;
   const desc = document.getElementById('in-desc').value.trim();
   const cat = document.getElementById('in-cat').value.trim();
-  const size = document.getElementById('in-size').value.trim();
+  const length = document.getElementById('in-size-length').value.trim();
+  const width = document.getElementById('in-size-width').value.trim();
+  const thickness = document.getElementById('in-size-thickness').value.trim();
+  const size = combineSizeParts(length, width, thickness);
+  const material = document.getElementById('in-material').value.trim();
   const notes = document.getElementById('in-notes').value.trim();
   const handed = document.getElementById('in-handed').checked;
   const errorEl = document.getElementById('error-msg');
@@ -1267,17 +1270,20 @@ async function handleAdd(){
   if(editingId){
     const it = items.find(i=>i.id===editingId);
     if(it){
-      it.cat = cat; it.desc = desc; it.size = size; it.qty = qty; it.qtyL = qtyL; it.notes = notes;
+      it.cat = cat; it.desc = desc; it.size = size; it.material = material; it.qty = qty; it.qtyL = qtyL; it.notes = notes;
     }
     editingId = null;
     document.getElementById('add-btn').textContent = 'Add to stock list';
   } else {
-    items.push({id: uid(), cat, desc, size, qty, qtyL, notes});
+    items.push({id: uid(), cat, desc, size, material, qty, qtyL, notes});
   }
 
   document.getElementById('in-cat').value = '';
   document.getElementById('in-desc').value = '';
-  document.getElementById('in-size').value = '';
+  document.getElementById('in-size-length').value = '';
+  document.getElementById('in-size-width').value = '';
+  document.getElementById('in-size-thickness').value = '';
+  document.getElementById('in-material').value = '';
   document.getElementById('in-qty').value = '';
   document.getElementById('in-qty-r').value = '';
   document.getElementById('in-qty-l').value = '';
@@ -1377,7 +1383,6 @@ document.getElementById('in-desc').addEventListener('keydown', e=>{
 
 document.getElementById('print-btn').addEventListener('click', () => { if(can('exportData')) window.print(); });
 document.getElementById('order-list-btn').addEventListener('click', openOrderList);
-document.getElementById('cutting-list-btn').addEventListener('click', openCuttingList);
 
 function buildStockPdfBlob(){
   const { jsPDF } = window.jspdf;
@@ -1412,11 +1417,11 @@ function buildStockPdfBlob(){
       const qtyStr = (it.qtyL !== null && it.qtyL !== undefined)
         ? ('R ' + it.qty + '  /  L ' + it.qtyL)
         : String(it.qty);
-      return [it.desc, it.size || '—', qtyStr, it.notes || ''];
+      return [it.desc, it.size || '—', it.material || '', qtyStr, it.notes || ''];
     });
     doc.autoTable({
       startY: y,
-      head: [[catName, 'Size', 'Qty', 'Notes']],
+      head: [[catName, 'Size', 'Material', 'Qty', 'Notes']],
       body: rows,
       styles: { fontSize: 8, cellPadding: 2 },
       headStyles: { fillColor: [168, 98, 46] },
@@ -1664,7 +1669,6 @@ function applyPermissionsToUi(){
   set('manage-users-btn', can('manageUsers'));
   const cu = getCurrentUser();
   set('order-list-btn', !!(cu && cu.isRoot));
-  set('cutting-list-btn', !!(cu && cu.isRoot));
   render();
 }
 
@@ -1677,96 +1681,36 @@ const PERMISSION_LABELS = [
   ['manageUsers', 'Manage users']
 ];
 
-// Root-only Order List: compares each item's "required" (par level, set
-// via the item-required input added to render()) against its actual
-// total quantity (qty + qtyL for split R/L items), and lists every item
-// that's short, grouped by category, with the missing amount — per user
-// request ("select how many of that part fits into it so the app can
-// calculate what is missing and put that with quantities on an order
-// list").
-function buildOrderListData(){
-  const shortfalls = items
-    .filter(it => it.required && (Number(it.qty) || 0) + (Number(it.qtyL) || 0) < Number(it.required))
-    .map(it => ({
-      cat: (it.cat && it.cat.trim()) ? it.cat.trim() : 'Uncategorised',
-      desc: it.desc,
-      size: it.size || '',
-      have: (Number(it.qty) || 0) + (Number(it.qtyL) || 0),
-      required: Number(it.required),
-      missing: Number(it.required) - ((Number(it.qty) || 0) + (Number(it.qtyL) || 0))
-    }));
-  shortfalls.sort((a, b) => naturalCompare(a.cat + ' ' + a.desc + ' ' + a.size, b.cat + ' ' + b.desc + ' ' + b.size));
-  return shortfalls;
-}
-
-function openOrderList(){
-  const cu = getCurrentUser();
-  if(!cu || !cu.isRoot) return;
-  const layer = document.getElementById('orderListModalLayer');
-  const rows = buildOrderListData();
-
-  let groupedHtml = '';
-  if(rows.length === 0){
-    groupedHtml = '<p class="modal-desc">Nothing is short right now — every item with a required amount set currently has enough in stock.</p>';
-  } else {
-    let currentCat = null;
-    rows.forEach(r => {
-      if(r.cat !== currentCat){
-        currentCat = r.cat;
-        groupedHtml += `<div style="font-weight:600;color:var(--oak-dark);margin:14px 0 6px;font-size:12.5px;">${escapeHtml(currentCat)}</div>`;
-      }
-      groupedHtml += `<div style="display:flex;justify-content:space-between;gap:10px;padding:5px 0;border-bottom:1px solid var(--line);font-size:13.5px;">
-        <span>${escapeHtml(r.desc)}${r.size ? ' — ' + escapeHtml(r.size) : ''} <span style="color:var(--ink-soft);">(have ${r.have}, need ${r.required})</span></span>
-        <span style="font-weight:600;color:var(--danger);white-space:nowrap;">order ${r.missing}</span>
-      </div>`;
-    });
-  }
-
-  layer.innerHTML = `<div class="modal-overlay" id="orderListOverlay">
-    <div class="modal" style="max-width:520px;">
-      <h3>Order list</h3>
-      <p class="modal-desc">Items below their required amount, based on the "Req." field root sets on each item.</p>
-      ${groupedHtml}
-      <div class="modal-actions">
-        <button class="modal-close" onclick="closeOrderList()">Close</button>
-        ${rows.length > 0 ? '<button class="add-btn" onclick="copyOrderList()">Copy list</button>' : ''}
-      </div>
-    </div>
-  </div>`;
-}
-
-function copyOrderList(){
-  const rows = buildOrderListData();
-  let currentCat = null;
-  let text = 'Order list\n';
-  rows.forEach(r => {
-    if(r.cat !== currentCat){
-      currentCat = r.cat;
-      text += `\n${currentCat}\n`;
-    }
-    text += `${r.desc}${r.size ? ' — ' + r.size : ''}: order ${r.missing} (have ${r.have}, need ${r.required})\n`;
-  });
-  if(navigator.clipboard && navigator.clipboard.writeText){
-    navigator.clipboard.writeText(text).catch(() => {});
-  }
-}
-
-function closeOrderList(){
-  document.getElementById('orderListModalLayer').innerHTML = '';
-}
-
 // Recipe editor — lets root define what components (and how many of
-// each) go into ONE unit of a category, plus how many units are
-// currently wanted, so buildCuttingListData() can work out shortfalls.
-// Per user request: "wet-bar: 1 top, 1 bottom, 1 side, 1 side, 1
-// divider, 1 divider, 1 cleats, 1 rail to build this unit — calculate
-// what will be short and put that on a cutting list."
+// each) go into ONE unit of a category. No manual "units to build"
+// number: whichever component's item name contains "top" or "center"
+// is auto-picked as the reference — its own qty on hand IS the number
+// of units currently on hand, and every other component's requirement
+// is worked out from that (qtyPerUnit × units). Per user request: the
+// recipe should "use the top or center to calculate what is needed for
+// the build by looking at the qty on hand" instead of typing a reorder
+// qty on every item.
 function itemOptionsHtml(selectedId){
   return items
     .slice()
     .sort((a, b) => naturalCompare((a.cat||'')+' '+a.desc+' '+(a.size||''), (b.cat||'')+' '+b.desc+' '+(b.size||'')))
     .map(it => `<option value="${it.id}" ${it.id === selectedId ? 'selected' : ''}>${escapeHtml((it.cat && it.cat.trim()) ? it.cat.trim() : 'Uncategorised')} — ${escapeHtml(it.desc)}${it.size ? ' (' + escapeHtml(it.size) + ')' : ''}</option>`)
     .join('');
+}
+
+function isTopOrCenterItem(it){
+  if(!it || !it.desc) return false;
+  const d = it.desc.toLowerCase();
+  return d.includes('top') || d.includes('center') || d.includes('centre');
+}
+
+// Picks which component in a recipe drives the units count: the first
+// component whose linked item's name contains "top"/"center"/"centre",
+// falling back to the first component if none match.
+function referenceComponent(recipe){
+  if(!recipe || !Array.isArray(recipe.components) || recipe.components.length === 0) return null;
+  const found = recipe.components.find(c => isTopOrCenterItem(items.find(i => i.id === c.itemId)));
+  return found || recipe.components[0];
 }
 
 function recipeRowHtml(component){
@@ -1785,16 +1729,15 @@ function openRecipeEditor(catName){
     return;
   }
   const layer = document.getElementById('recipeModalLayer');
-  const existing = recipes[catName] || { units: 1, components: [] };
+  const existing = recipes[catName] || { components: [] };
+  const ref = referenceComponent(existing);
+  const refItem = ref ? items.find(i => i.id === ref.itemId) : null;
 
   layer.innerHTML = `<div class="modal-overlay" id="recipeOverlay">
     <div class="modal" style="max-width:560px;">
       <h3>Recipe: ${escapeHtml(catName)}</h3>
-      <p class="modal-desc">Define what it takes to build ONE unit of "${escapeHtml(catName)}", and how many units you currently want to build. The Cutting List will show what's short.</p>
-      <div class="field" style="margin-bottom:14px;max-width:160px;">
-        <label>Units to build</label>
-        <input type="number" id="recipeUnits" min="1" value="${existing.units || 1}">
-      </div>
+      <p class="modal-desc">Define what it takes to build ONE unit of "${escapeHtml(catName)}". Whichever component's name contains "top" or "center" is used as the build-qty reference — its own stock on hand sets how many units you currently have, and the Order List works out what's short on everything else.</p>
+      ${refItem ? `<p class="modal-desc" style="color:var(--oak-dark);">Reference component: <strong>${escapeHtml(refItem.desc)}</strong></p>` : ''}
       <div id="recipeRows">
         ${existing.components.length > 0 ? existing.components.map(recipeRowHtml).join('') : recipeRowHtml(null)}
       </div>
@@ -1821,7 +1764,6 @@ function openRecipeEditor(catName){
 }
 
 async function saveRecipeForm(catName){
-  const units = parseInt(document.getElementById('recipeUnits').value, 10) || 1;
   const rows = [...document.querySelectorAll('#recipeRows .recipe-row')];
   if(rows.length === 0){
     document.getElementById('recipeErr').textContent = 'Add at least one component.';
@@ -1834,7 +1776,12 @@ async function saveRecipeForm(catName){
     const it = items.find(i => i.id === itemId);
     return { itemId, desc: it ? it.desc : '(deleted item)', size: it ? (it.size || '') : '', qtyPerUnit };
   });
-  recipes[catName] = { units, components };
+  if(!components.some(c => isTopOrCenterItem(items.find(i => i.id === c.itemId)))){
+    document.getElementById('recipeErr').textContent = 'Add a component whose name contains "top" or "center" — that\'s the one used to work out how many units you have.';
+    document.getElementById('recipeErr').style.display = 'block';
+    return;
+  }
+  recipes[catName] = { components };
   await save();
   closeRecipeEditor();
 }
@@ -1850,26 +1797,36 @@ function closeRecipeEditor(){
   document.getElementById('recipeModalLayer').innerHTML = '';
 }
 
-// Cutting List: for every category with a recipe, multiplies each
-// component's qtyPerUnit by that recipe's "units to build", compares
-// against the component item's actual current stock (qty + qtyL), and
-// lists anything short — per user request ("the app calculate what
-// will be short from that and put that on a cutting list").
-function buildCuttingListData(){
+// Order List: for every category with a recipe, works out how many
+// units are on hand from the "top"/"center" reference component's own
+// stock, multiplies every other component's qtyPerUnit by that units
+// count, compares against that component's actual current stock (qty +
+// qtyL), and lists anything short — including that item's notes, per
+// user request ("i want the order list to pull the notes as well").
+function buildOrderListData(){
   const shortfalls = [];
   Object.keys(recipes).forEach(catName => {
     const recipe = recipes[catName];
-    if(!recipe || !recipe.units || !Array.isArray(recipe.components)) return;
+    if(!recipe || !Array.isArray(recipe.components) || recipe.components.length === 0) return;
+    const ref = referenceComponent(recipe);
+    if(!ref) return;
+    const refItem = items.find(i => i.id === ref.itemId);
+    const refHave = refItem ? (Number(refItem.qty) || 0) + (Number(refItem.qtyL) || 0) : 0;
+    const refQtyPerUnit = ref.qtyPerUnit || 1;
+    const units = Math.floor(refHave / refQtyPerUnit);
+
     recipe.components.forEach(comp => {
+      if(comp === ref) return; // the reference item defines the units, it isn't ordered against itself
       const it = items.find(i => i.id === comp.itemId);
       const have = it ? (Number(it.qty) || 0) + (Number(it.qtyL) || 0) : 0;
-      const required = comp.qtyPerUnit * recipe.units;
+      const required = comp.qtyPerUnit * units;
       const missing = required - have;
       if(missing > 0){
         shortfalls.push({
           buildCat: catName,
           desc: it ? it.desc : comp.desc,
           size: it ? (it.size || '') : comp.size,
+          notes: it ? (it.notes || '') : '',
           deleted: !it,
           have, required, missing
         });
@@ -1880,16 +1837,16 @@ function buildCuttingListData(){
   return shortfalls;
 }
 
-function openCuttingList(){
+function openOrderList(){
   if(!currentUserIsRoot()) return;
-  const layer = document.getElementById('cuttingListModalLayer');
-  const rows = buildCuttingListData();
+  const layer = document.getElementById('orderListModalLayer');
+  const rows = buildOrderListData();
 
   let groupedHtml = '';
   if(Object.keys(recipes).length === 0){
     groupedHtml = '<p class="modal-desc">No recipes set up yet — click "recipe" next to a category heading to define one.</p>';
   } else if(rows.length === 0){
-    groupedHtml = '<p class="modal-desc">Nothing to cut right now — every recipe\'s components are fully stocked for the units currently wanted.</p>';
+    groupedHtml = '<p class="modal-desc">Nothing to order right now — every recipe\'s components are fully stocked for the units currently on hand.</p>';
   } else {
     let currentCat = null;
     rows.forEach(r => {
@@ -1897,48 +1854,47 @@ function openCuttingList(){
         currentCat = r.buildCat;
         groupedHtml += `<div style="font-weight:600;color:var(--oak-dark);margin:14px 0 6px;font-size:12.5px;">To build: ${escapeHtml(currentCat)}</div>`;
       }
-      groupedHtml += `<div style="display:flex;justify-content:space-between;gap:10px;padding:5px 0;border-bottom:1px solid var(--line);font-size:13.5px;">
-        <span>${escapeHtml(r.desc)}${r.size ? ' — ' + escapeHtml(r.size) : ''}${r.deleted ? ' <span style="color:var(--danger);">(item deleted)</span>' : ''} <span style="color:var(--ink-soft);">(have ${r.have}, need ${r.required})</span></span>
-        <span style="font-weight:600;color:var(--danger);white-space:nowrap;">cut ${r.missing}</span>
+      groupedHtml += `<div style="padding:5px 0;border-bottom:1px solid var(--line);font-size:13.5px;">
+        <div style="display:flex;justify-content:space-between;gap:10px;">
+          <span>${escapeHtml(r.desc)}${r.size ? ' — ' + escapeHtml(r.size) : ''}${r.deleted ? ' <span style="color:var(--danger);">(item deleted)</span>' : ''} <span style="color:var(--ink-soft);">(have ${r.have}, need ${r.required})</span></span>
+          <span style="font-weight:600;color:var(--danger);white-space:nowrap;">order ${r.missing}</span>
+        </div>
+        ${r.notes ? `<div class="item-notes">${escapeHtml(r.notes)}</div>` : ''}
       </div>`;
     });
   }
 
-  layer.innerHTML = `<div class="modal-overlay" id="cuttingListOverlay">
+  layer.innerHTML = `<div class="modal-overlay" id="orderListOverlay">
     <div class="modal" style="max-width:520px;">
-      <h3>Cutting list</h3>
-      <p class="modal-desc">Components short of what's needed to build the units set in each category's recipe.</p>
+      <h3>Order list</h3>
+      <p class="modal-desc">Components short of what's needed, based on each recipe's "top"/"center" component telling us how many units are on hand.</p>
       ${groupedHtml}
       <div class="modal-actions">
-        <button class="modal-close" id="cuttingListCloseBtn">Close</button>
-        ${rows.length > 0 ? '<button class="add-btn" id="cuttingListCopyBtn">Copy list</button>' : ''}
+        <button class="modal-close" onclick="closeOrderList()">Close</button>
+        ${rows.length > 0 ? '<button class="add-btn" onclick="copyOrderList()">Copy list</button>' : ''}
       </div>
     </div>
   </div>`;
-
-  document.getElementById('cuttingListCloseBtn').onclick = closeCuttingList;
-  const copyBtn = document.getElementById('cuttingListCopyBtn');
-  if(copyBtn) copyBtn.onclick = copyCuttingList;
 }
 
-function copyCuttingList(){
-  const rows = buildCuttingListData();
+function copyOrderList(){
+  const rows = buildOrderListData();
   let currentCat = null;
-  let text = 'Cutting list\n';
+  let text = 'Order list\n';
   rows.forEach(r => {
     if(r.buildCat !== currentCat){
       currentCat = r.buildCat;
       text += `\nTo build: ${currentCat}\n`;
     }
-    text += `${r.desc}${r.size ? ' — ' + r.size : ''}: cut ${r.missing} (have ${r.have}, need ${r.required})\n`;
+    text += `${r.desc}${r.size ? ' — ' + r.size : ''}: order ${r.missing} (have ${r.have}, need ${r.required})${r.notes ? ' — ' + r.notes : ''}\n`;
   });
   if(navigator.clipboard && navigator.clipboard.writeText){
     navigator.clipboard.writeText(text).catch(() => {});
   }
 }
 
-function closeCuttingList(){
-  document.getElementById('cuttingListModalLayer').innerHTML = '';
+function closeOrderList(){
+  document.getElementById('orderListModalLayer').innerHTML = '';
 }
 
 function openManageUsers(editId){
