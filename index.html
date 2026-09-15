@@ -656,6 +656,40 @@ function currentUserIsRoot(){
   return !!(u && u.isRoot);
 }
 
+// --- PER-APP ACCESS (added 2026-09-11) ---------------------------------
+// users[] is shared between this app and the Dispatch app (same Firebase
+// 'dispatchBoard' node), so a single account can now be scoped to one
+// app or both. u.apps = { dispatch: bool, stock: bool }. APP_ID is the
+// ONLY line that differs between the two apps' copies of this block —
+// keep them otherwise identical.
+const APP_ID = 'stock';
+const APP_LABELS = { dispatch: 'Dispatch app', stock: 'Stock List app' };
+
+function defaultApps(){
+  return { dispatch: true, stock: true };
+}
+
+function getMainRoot(){
+  return users.find(u => u.isMainRoot) || users.find(u => u.isRoot) || null;
+}
+
+function isMainRoot(u){
+  const mr = getMainRoot();
+  return !!(u && mr && u.id === mr.id);
+}
+
+function currentUserIsMainRoot(){
+  return isMainRoot(getCurrentUser());
+}
+
+function userHasApp(u, appId){
+  appId = appId || APP_ID;
+  if(!u) return false;
+  if(isMainRoot(u)) return true;
+  if(!u.apps) return true; // legacy account — not yet scoped
+  return !!u.apps[appId];
+}
+
 async function hashPin(pin){
   const enc = new TextEncoder().encode(pin);
   const buf = await crypto.subtle.digest('SHA-256', enc);
@@ -1552,10 +1586,20 @@ function showLoginScreen(){
     return;
   }
 
+  // Only show accounts allowed to use THIS app (see userHasApp).
+  const appUsers = users.filter(u => userHasApp(u));
+  if(appUsers.length === 0){
+    layer.innerHTML = `<div class="modal">
+      <h3>No access</h3>
+      <p class="modal-desc">No account on this board has been given access to the ${APP_LABELS[APP_ID]}. Ask the main root account to grant access under Manage users.</p>
+    </div>`;
+    return;
+  }
+
   layer.innerHTML = `<div class="modal">
     <h3>Who's this?</h3>
     <p class="modal-desc">Pick your name to continue.</p>
-    ${users.map(u => `<button class="user-pick-btn" onclick="promptPin('${u.id}')">${escapeHtml(u.username)}${u.isRoot ? ' (root)' : ''}</button>`).join('')}
+    ${appUsers.map(u => `<button class="user-pick-btn" onclick="promptPin('${u.id}')">${escapeHtml(u.username)}${u.isRoot ? ' (root)' : ''}</button>`).join('')}
   </div>`;
 }
 
@@ -1628,7 +1672,9 @@ async function createRootAccount(){
     return;
   }
   const pinHash = await hashPin(pin);
-  const rootUser = { id: uid(), username, pin: pinHash, isRoot: true, permissions: defaultPermissions() };
+  // First account ever created on this board is the MAIN root: the
+  // only one that can reach every app and grant app access to others.
+  const rootUser = { id: uid(), username, pin: pinHash, isRoot: true, isMainRoot: true, permissions: defaultPermissions(), apps: defaultApps() };
   users.push(rootUser);
   currentUserId = rootUser.id;
   try{ localStorage.setItem('currentUserId', rootUser.id); }catch(e){}
@@ -1931,6 +1977,13 @@ function openManageUsers(editId){
   const layer = document.getElementById('userModalLayer');
   const editing = editId ? users.find(u => u.id === editId) : null;
   const perms = editing ? editing.permissions : defaultPermissions();
+  const apps = editing ? (editing.apps || defaultApps()) : defaultApps();
+  const iAmMainRoot = currentUserIsMainRoot();
+  const editingMainRoot = editing ? isMainRoot(editing) : false;
+  if(editingMainRoot && !iAmMainRoot){
+    alert('Only the main root account can edit itself.');
+    return;
+  }
 
   layer.innerHTML = `<div class="modal-overlay" id="usersOverlay">
     <div class="modal" style="max-width:520px;">
@@ -1938,10 +1991,10 @@ function openManageUsers(editId){
       ${editing ? '' : `<p class="modal-desc">Add people who use this stock list and choose exactly what each one can do.</p>
       <div id="userList">
         ${users.map(u => `<div class="user-row">
-          <span class="who">${escapeHtml(u.username)}${u.isRoot ? '<span class="tag">Root — full access</span>' : ''}</span>
+          <span class="who">${escapeHtml(u.username)}${isMainRoot(u) ? '<span class="tag">Main root — all apps</span>' : (u.isRoot ? '<span class="tag">Root</span>' : '')}<span class="tag" style="opacity:.75;">${Object.keys(APP_LABELS).filter(a => userHasApp(u, a)).map(a => APP_LABELS[a]).join(', ') || 'No apps'}</span></span>
           <span class="acts">
-            <button onclick="openManageUsers('${u.id}')">Edit</button>
-            ${users.length > 1 ? `<button onclick="deleteUser('${u.id}')">Delete</button>` : ''}
+            ${(isMainRoot(u) && !iAmMainRoot) ? '' : `<button onclick="openManageUsers('${u.id}')">Edit</button>`}
+            ${(users.length > 1 && !isMainRoot(u)) ? `<button onclick="deleteUser('${u.id}')">Delete</button>` : ''}
           </span>
         </div>`).join('')}
       </div>
@@ -1954,8 +2007,12 @@ function openManageUsers(editId){
         <label>PIN</label>
         <input type="text" id="userFormPin" value="" placeholder="${editing ? 'Leave blank to keep current PIN' : 'At least 4 characters'}">
       </div>
-      <label style="display:flex;align-items:center;gap:7px;font-size:13px;font-weight:400;margin-bottom:6px;">
-        <input type="checkbox" id="userFormRoot" ${editing && editing.isRoot ? 'checked' : ''}> Full access (root — can do everything)
+      <div style="font-size:12px;font-weight:600;margin-bottom:6px;">App access${iAmMainRoot ? '' : ' (main root only)'}</div>
+      <div class="perm-grid" style="${iAmMainRoot ? '' : 'opacity:.5;'}">
+        ${Object.keys(APP_LABELS).map(a => `<label><input type="checkbox" class="appCheck" data-app="${a}" ${apps[a] ? 'checked' : ''} ${iAmMainRoot ? '' : 'disabled'}> ${APP_LABELS[a]}</label>`).join('')}
+      </div>
+      <label style="display:flex;align-items:center;gap:7px;font-size:13px;font-weight:400;margin:10px 0 6px;">
+        <input type="checkbox" id="userFormRoot" ${editing && editing.isRoot ? 'checked' : ''}${editingMainRoot ? ' disabled' : ''}> Full access (root — can do everything in their apps)
       </label>
       <div class="perm-grid" id="permGrid">
         ${PERMISSION_LABELS.map(([key,label]) => `<label><input type="checkbox" class="permCheck" data-key="${key}" ${perms[key] ? 'checked' : ''}> ${label}</label>`).join('')}
@@ -2020,16 +2077,26 @@ async function saveUserForm(editId){
   const permissions = existingUser ? {...defaultPermissions(), ...existingUser.permissions} : defaultPermissions();
   document.querySelectorAll('.permCheck').forEach(cb => { permissions[cb.dataset.key] = cb.checked; });
 
+  let apps;
+  if(currentUserIsMainRoot()){
+    apps = {};
+    document.querySelectorAll('.appCheck').forEach(cb => { apps[cb.dataset.app] = cb.checked; });
+  } else {
+    apps = existingUser ? (existingUser.apps || defaultApps()) : defaultApps();
+  }
+
   if(editId){
     const u = users.find(x => x.id === editId);
     if(u){
+      if(isMainRoot(u) && !currentUserIsMainRoot()) return; // belt and braces
       u.username = username;
       if(pin) u.pin = await hashPin(pin);
-      u.isRoot = isRoot;
+      u.isRoot = isMainRoot(u) ? true : isRoot;
       u.permissions = permissions;
+      u.apps = isMainRoot(u) ? defaultApps() : apps;
     }
   } else {
-    users.push({ id: uid(), username, pin: await hashPin(pin), isRoot, permissions });
+    users.push({ id: uid(), username, pin: await hashPin(pin), isRoot, permissions, apps });
   }
   await saveUsers();
   renderUserBadge();
@@ -2040,6 +2107,10 @@ async function saveUserForm(editId){
 async function deleteUser(userId){
   const target = users.find(u => u.id === userId);
   if(!target) return;
+  if(isMainRoot(target)){
+    alert("You can't delete the main root account.");
+    return;
+  }
   if(target.isRoot && users.filter(u => u.isRoot).length <= 1){
     alert("You can't delete the only root account — make another user root first.");
     return;
