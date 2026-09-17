@@ -830,18 +830,28 @@ async function saveUsers(){
 // normally milliseconds old, not the multi-second gap a fresh jsonbin
 // fetch used to have) then writes back just the items path.
 async function sendToDispatchUnfinished(type, qty, ref){
+  await sendBatchToDispatchUnfinished([{ type, qty, ref }]);
+}
+
+// Same as sendToDispatchUnfinished but writes several entries in one
+// read-modify-write, so a job-level "build" (many items at once)
+// doesn't race itself with several overlapping writes to the same
+// dispatch items list.
+async function sendBatchToDispatchUnfinished(entries){
   if(!firebaseDispatchBoardRef){
     throw new Error('Not connected to the dispatch board yet — try again in a moment.');
   }
   const dispatchItems = Array.isArray(dispatchBoardCache.items) ? dispatchBoardCache.items.slice() : [];
-  dispatchItems.push({
-    id: uid(),
-    type, qty, ref: ref || '',
-    status: 'unvinaged',
-    addedDate: new Date().toLocaleDateString('en-GB', {day:'2-digit', month:'long', year:'numeric'}),
-    vinagedDate: null,
-    dispatchedDate: null,
-    noteId: null
+  entries.forEach(e => {
+    dispatchItems.push({
+      id: uid(),
+      type: e.type, qty: e.qty, ref: e.ref || '',
+      status: 'unvinaged',
+      addedDate: new Date().toLocaleDateString('en-GB', {day:'2-digit', month:'long', year:'numeric'}),
+      vinagedDate: null,
+      dispatchedDate: null,
+      noteId: null
+    });
   });
   await firebaseDispatchBoardRef.child('items').set(dispatchItems);
 }
@@ -1109,6 +1119,19 @@ function render(){
       recipeBtn.onclick = () => openRecipeEditor(catName);
       left.appendChild(recipeBtn);
     }
+    // Job-level "build": sends every item under this job to the
+    // dispatch app as Unfinished, then removes the whole job from this
+    // stock list — per user request ("if it gets pushed the items
+    // under it gets removed from the stock list and it then gets
+    // moved to the dispatch app"). Same permission as the per-item
+    // "mark built" button since it's the same action at job scale.
+    if(can('markBuilt')){
+      const buildCatBtn = document.createElement('button');
+      buildCatBtn.className = 'cat-rename-btn';
+      buildCatBtn.textContent = 'build';
+      buildCatBtn.onclick = () => buildCategory(catName);
+      left.appendChild(buildCatBtn);
+    }
     head.appendChild(left);
 
     const countSpan = document.createElement('span');
@@ -1307,12 +1330,77 @@ async function copyCategory(oldName){
   const mergingIntoExisting = items.some(it => groupKey(it) === trimmed);
   if(mergingIntoExisting && !confirm(`"${trimmed}" already exists as a job — add the copied items into it?`)) return;
 
+  // Track old item id -> new item id so the recipe (which references
+  // components by item id) can be copied across too, per user request
+  // ("when i copy the job the recipy has to copy as well").
+  const oldToNewId = {};
   const toCopy = items.filter(it => groupKey(it) === oldName);
   toCopy.forEach(it => {
-    items.push({...it, id: uid(), cat: trimmed});
+    const newId = uid();
+    oldToNewId[it.id] = newId;
+    items.push({...it, id: newId, cat: trimmed});
   });
+
+  const oldRecipe = recipes[oldName];
+  if(oldRecipe && Array.isArray(oldRecipe.components) && !recipes[trimmed]){
+    // Remap each component to the copied item; a component that
+    // pointed at an item OUTSIDE this job (a shared/bought-in part
+    // that wasn't copied) keeps pointing at that same original item.
+    recipes[trimmed] = {
+      components: oldRecipe.components.map(c => ({
+        ...c,
+        itemId: oldToNewId[c.itemId] || c.itemId
+      }))
+    };
+  }
+
   await save();
   render();
+}
+
+// Job-level "build": sends every item under this job to the dispatch
+// app as Unfinished, then removes the whole job from this stock list
+// — per user request ("if it gets pushed the items under it gets
+// removed from the stock list and it then gets moved to the dispatch
+// app"). Handed items go over as two separate entries (Right/Left)
+// so the dispatch app's quantities still make sense; items with 0 on
+// hand aren't sent as an Unfinished entry (nothing to build) but are
+// still removed from this list along with the rest of the job.
+async function buildCategory(catName){
+  if(!can('markBuilt')) return;
+  const groupKey = (it) => (it.cat && it.cat.trim()) ? it.cat.trim() : 'Uncategorised';
+  const catItems = items.filter(it => groupKey(it) === catName);
+  if(catItems.length === 0) return;
+  if(!confirm(`Build job "${catName}"? This sends its items to the dispatch app as Unfinished and removes all ${catItems.length} item(s) from this stock list. This can't be undone.`)) return;
+  if(!firebaseDispatchBoardRef){
+    alert('Not connected to the dispatch board yet — check your connection and try again.');
+    return;
+  }
+
+  const entries = [];
+  catItems.forEach(it => {
+    const handed = it.qtyL !== null && it.qtyL !== undefined;
+    if(handed){
+      const r = Number(it.qty) || 0;
+      const l = Number(it.qtyL) || 0;
+      if(r > 0) entries.push({ type: it.desc + ' — Right handed', qty: r, ref: '' });
+      if(l > 0) entries.push({ type: it.desc + ' — Left handed', qty: l, ref: '' });
+    } else {
+      const q = Number(it.qty) || 0;
+      if(q > 0) entries.push({ type: it.desc, qty: q, ref: '' });
+    }
+  });
+
+  try{
+    if(entries.length > 0){
+      await sendBatchToDispatchUnfinished(entries);
+    }
+    items = items.filter(it => groupKey(it) !== catName);
+    await save();
+    render();
+  } catch(e){
+    alert('Could not reach the dispatch app — check the link settings and try again.');
+  }
 }
 
 async function deleteItem(id){
