@@ -1826,6 +1826,27 @@ function openRecipeEditor(catName){
   }
   const layer = document.getElementById('recipeModalLayer');
   const existing = recipes[catName] || { components: [] };
+
+  // Per user request: "put the descriptions already in, all i have to
+  // do is add the amounts needed" — pre-fill a row for every item
+  // already in this job/category (so root doesn't have to add a row
+  // and hunt it out of the full item dropdown one at a time), keeping
+  // any qtyPerUnit already saved for it. Existing components that
+  // reference an item from a DIFFERENT category (a shared/bought-in
+  // component) are kept too, listed after the category's own items.
+  // The item dropdown on each row is left in place so it can still be
+  // repointed at a different item if needed.
+  const groupKey = (it) => (it.cat && it.cat.trim()) ? it.cat.trim() : 'Uncategorised';
+  const itemsInCat = items
+    .filter(it => groupKey(it) === catName)
+    .sort((a, b) => naturalCompare((a.desc||'')+' '+(a.size||''), (b.desc||'')+' '+(b.size||'')));
+  const byItemId = {};
+  existing.components.forEach(c => { byItemId[c.itemId] = c; });
+  const prefilled = itemsInCat.map(it => byItemId[it.id] || { itemId: it.id, qtyPerUnit: 1 });
+  const prefilledIds = new Set(itemsInCat.map(it => it.id));
+  const extras = existing.components.filter(c => !prefilledIds.has(c.itemId));
+  const initialComponents = [...prefilled, ...extras];
+
   const ref = referenceComponent(existing);
   const refItem = ref ? items.find(i => i.id === ref.itemId) : null;
 
@@ -1835,7 +1856,7 @@ function openRecipeEditor(catName){
       <p class="modal-desc">Define what it takes to build ONE unit of "${escapeHtml(catName)}". Whichever component's name contains "top" or "center" is used as the build-qty reference — its own stock on hand sets how many units you currently have, and the Order List works out what's short on everything else.</p>
       ${refItem ? `<p class="modal-desc" style="color:var(--oak-dark);">Reference component: <strong>${escapeHtml(refItem.desc)}</strong></p>` : ''}
       <div id="recipeRows">
-        ${existing.components.length > 0 ? existing.components.map(recipeRowHtml).join('') : recipeRowHtml(null)}
+        ${initialComponents.length > 0 ? initialComponents.map(recipeRowHtml).join('') : recipeRowHtml(null)}
       </div>
       <button type="button" class="ghost-btn" id="recipeAddRowBtn" style="margin-bottom:14px;">+ Add component</button>
       <p class="error-msg" id="recipeErr" style="display:none;"></p>
