@@ -443,7 +443,8 @@
       </div>
       <div class="field full">
         <label for="in-desc">Item</label>
-        <input type="text" id="in-desc" placeholder="e.g. Back shelf, Cleats, TV panel chipboard">
+        <input type="text" id="in-desc" list="desc-list" placeholder="e.g. Back shelf, Cleats, TV panel chipboard">
+        <datalist id="desc-list"></datalist>
       </div>
       <div class="field full">
         <label for="in-size-length">Size — Length × Width × Thickness</label>
@@ -1029,6 +1030,19 @@ function render(){
     materials.appendChild(opt);
   });
 
+  // Per user request: "dropdown of everything that is added" for the
+  // Item field, so a repeat stock take can pick a description that was
+  // used before instead of retyping it. Pulled from every item ever
+  // added (not just the current category), same pattern as cat-list
+  // and material-list above.
+  const descs = document.getElementById('desc-list');
+  descs.innerHTML = '';
+  [...new Set(items.map(i=>i.desc).filter(Boolean))].sort((a,b)=>naturalCompare(a,b)).forEach(d=>{
+    const opt = document.createElement('option');
+    opt.value = d;
+    descs.appendChild(opt);
+  });
+
   if(filtered.length === 0){
     root.innerHTML = '<div class="empty">' + (items.length===0 ? 'No items yet. Add your first one above.' : 'No items match your search.') + '</div>';
     return;
@@ -1072,6 +1086,18 @@ function render(){
       renameBtn.textContent = 'rename';
       renameBtn.onclick = () => renameCategory(catName);
       left.appendChild(renameBtn);
+    }
+    // Duplicates every item in this job/category into a new job with a
+    // new name, per user request ("copy a job and change the job name
+    // so when i have multiple jobs that is close to each other i dont
+    // have to type everything out"). Gated on addItems since it's
+    // fundamentally adding new items to the list.
+    if(can('addItems')){
+      const copyBtn = document.createElement('button');
+      copyBtn.className = 'cat-rename-btn';
+      copyBtn.textContent = 'copy';
+      copyBtn.onclick = () => copyCategory(catName);
+      left.appendChild(copyBtn);
     }
     // Opens the recipe editor for this category — root-only, per user
     // request ("wet-bar: 1 top, 1 bottom, 1 side... to build this
@@ -1261,6 +1287,29 @@ async function renameCategory(oldName){
   let count = 0;
   items.forEach(it => {
     if(groupKey(it) === oldName){ it.cat = trimmed; count++; }
+  });
+  await save();
+  render();
+}
+
+async function copyCategory(oldName){
+  if(!can('addItems')) return;
+  const newName = prompt(`Copy job "${oldName}" to a new job called:`, oldName + ' copy');
+  if(newName === null) return;
+  const trimmed = newName.trim();
+  if(!trimmed) return;
+  if(trimmed === oldName){
+    alert('Enter a different name for the new job.');
+    return;
+  }
+
+  const groupKey = (it) => (it.cat && it.cat.trim()) ? it.cat.trim() : 'Uncategorised';
+  const mergingIntoExisting = items.some(it => groupKey(it) === trimmed);
+  if(mergingIntoExisting && !confirm(`"${trimmed}" already exists as a job — add the copied items into it?`)) return;
+
+  const toCopy = items.filter(it => groupKey(it) === oldName);
+  toCopy.forEach(it => {
+    items.push({...it, id: uid(), cat: trimmed});
   });
   await save();
   render();
