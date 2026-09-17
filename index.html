@@ -1920,9 +1920,10 @@ function closeRecipeEditor(){
 // count, compares against that component's actual current stock (qty +
 // qtyL), and lists anything short — including that item's notes, per
 // user request ("i want the order list to pull the notes as well").
-function buildOrderListData(){
+function buildOrderListData(catFilter){
   const shortfalls = [];
   Object.keys(recipes).forEach(catName => {
+    if(catFilter && !catFilter.has(catName)) return;
     const recipe = recipes[catName];
     if(!recipe || !Array.isArray(recipe.components) || recipe.components.length === 0) return;
     const ref = referenceComponent(recipe);
@@ -1955,16 +1956,25 @@ function buildOrderListData(){
   return shortfalls;
 }
 
-function openOrderList(){
-  if(!currentUserIsRoot()) return;
-  const layer = document.getElementById('orderListModalLayer');
-  const rows = buildOrderListData();
+// Which jobs are currently ticked in the Order List modal — per user
+// request ("put a tick box so that i can choose witch jobs i want
+// cutting list from"). Lives in module state (not saved) so toggling a
+// box just re-filters the list already on screen instead of closing
+// and reopening the modal.
+let orderListSelectedCats = new Set();
+
+function renderOrderListRows(){
+  const rows = buildOrderListData(orderListSelectedCats);
+  const rowsWrap = document.getElementById('orderListRows');
+  const recipeCats = Object.keys(recipes);
 
   let groupedHtml = '';
-  if(Object.keys(recipes).length === 0){
+  if(recipeCats.length === 0){
     groupedHtml = '<p class="modal-desc">No recipes set up yet — click "recipe" next to a category heading to define one.</p>';
+  } else if(orderListSelectedCats.size === 0){
+    groupedHtml = '<p class="modal-desc">No jobs ticked — tick at least one job above to see its cutting list.</p>';
   } else if(rows.length === 0){
-    groupedHtml = '<p class="modal-desc">Nothing to order right now — every recipe\'s components are fully stocked for the units currently on hand.</p>';
+    groupedHtml = '<p class="modal-desc">Nothing to order right now — every ticked job\'s recipe is fully stocked for the units currently on hand.</p>';
   } else {
     let currentCat = null;
     rows.forEach(r => {
@@ -1981,23 +1991,62 @@ function openOrderList(){
       </div>`;
     });
   }
+  rowsWrap.innerHTML = groupedHtml;
+
+  const exportBtn = document.getElementById('orderListExportBtn');
+  const copyBtn = document.getElementById('orderListCopyBtn');
+  if(exportBtn) exportBtn.style.display = rows.length > 0 ? '' : 'none';
+  if(copyBtn) copyBtn.style.display = rows.length > 0 ? '' : 'none';
+}
+
+function toggleOrderListCat(catName, checked){
+  if(checked) orderListSelectedCats.add(catName);
+  else orderListSelectedCats.delete(catName);
+  renderOrderListRows();
+}
+
+function setAllOrderListCats(checked){
+  const recipeCats = Object.keys(recipes);
+  orderListSelectedCats = checked ? new Set(recipeCats) : new Set();
+  document.querySelectorAll('.orderListCatCheck').forEach(cb => { cb.checked = checked; });
+  renderOrderListRows();
+}
+
+function openOrderList(){
+  if(!currentUserIsRoot()) return;
+  const layer = document.getElementById('orderListModalLayer');
+  const recipeCats = Object.keys(recipes).sort((a, b) => naturalCompare(a, b));
+  // Default to every job ticked each time the modal is opened.
+  orderListSelectedCats = new Set(recipeCats);
+
+  const checkboxesHtml = recipeCats.length > 0 ? `<div class="modal-desc" style="margin-bottom:4px;">Tick which jobs to include:</div>
+    <div style="display:flex;flex-wrap:wrap;gap:8px 14px;margin-bottom:10px;padding:10px;background:var(--card);border:1px solid var(--line);border-radius:8px;">
+      ${recipeCats.map(c => `<label style="display:flex;align-items:center;gap:6px;font-size:13px;">
+        <input type="checkbox" class="orderListCatCheck" data-cat="${escapeHtml(c)}" checked onchange="toggleOrderListCat('${c.replace(/'/g, "\\'")}', this.checked)"> ${escapeHtml(c)}
+      </label>`).join('')}
+      <button type="button" class="ghost-btn" style="padding:3px 10px;font-size:12px;" onclick="setAllOrderListCats(true)">All</button>
+      <button type="button" class="ghost-btn" style="padding:3px 10px;font-size:12px;" onclick="setAllOrderListCats(false)">None</button>
+    </div>` : '';
 
   layer.innerHTML = `<div class="modal-overlay" id="orderListOverlay">
     <div class="modal" style="max-width:520px;">
       <h3>Order list</h3>
       <p class="modal-desc">Components short of what's needed, based on each recipe's "top"/"center" component telling us how many units are on hand.</p>
-      ${groupedHtml}
+      ${checkboxesHtml}
+      <div id="orderListRows"></div>
       <div class="modal-actions">
         <button class="modal-close" onclick="closeOrderList()">Close</button>
-        ${rows.length > 0 ? '<button class="ghost-btn" onclick="exportOrderListToExcel()">Export to Excel</button>' : ''}
-        ${rows.length > 0 ? '<button class="add-btn" onclick="copyOrderList()">Copy list</button>' : ''}
+        <button class="ghost-btn" id="orderListExportBtn" onclick="exportOrderListToExcel()">Export to Excel</button>
+        <button class="add-btn" id="orderListCopyBtn" onclick="copyOrderList()">Copy list</button>
       </div>
     </div>
   </div>`;
+
+  renderOrderListRows();
 }
 
 function copyOrderList(){
-  const rows = buildOrderListData();
+  const rows = buildOrderListData(orderListSelectedCats);
   let currentCat = null;
   let text = 'Order list\n';
   rows.forEach(r => {
@@ -2015,9 +2064,9 @@ function copyOrderList(){
 // Exports the current Order List shortfalls to a .xlsx file, one row
 // per component that's short, grouped visually by which category it's
 // needed to build — per user request ("i want it to export it to
-// excel").
+// excel"). Only includes jobs currently ticked in the modal.
 function exportOrderListToExcel(){
-  const rows = buildOrderListData();
+  const rows = buildOrderListData(orderListSelectedCats);
   if(rows.length === 0) return;
   const sheetData = [['To build', 'Item', 'Size', 'Material', 'Cut qty', 'Notes']];
   rows.forEach(r => {
