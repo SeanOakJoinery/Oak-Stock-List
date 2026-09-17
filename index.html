@@ -1366,35 +1366,59 @@ async function copyCategory(oldName){
 // so the dispatch app's quantities still make sense; items with 0 on
 // hand aren't sent as an Unfinished entry (nothing to build) but are
 // still removed from this list along with the rest of the job.
+// Job-level "build": works out how many complete units the job's
+// recipe says are on hand (same reference-component logic as the
+// Order List), sends ONE dispatch entry for the job itself (e.g. "Wet
+// bar" x3) rather than one entry per component, then removes every
+// item under the job from this stock list — per user request ("i
+// want it to create that unit for example wet bar... when i klick
+// build at the job name it has to delete the units underneath it and
+// put wet bar in the delivery app").
 async function buildCategory(catName){
   if(!can('markBuilt')) return;
   const groupKey = (it) => (it.cat && it.cat.trim()) ? it.cat.trim() : 'Uncategorised';
   const catItems = items.filter(it => groupKey(it) === catName);
   if(catItems.length === 0) return;
-  if(!confirm(`Build job "${catName}"? This sends its items to the dispatch app as Unfinished and removes all ${catItems.length} item(s) from this stock list. This can't be undone.`)) return;
+
+  const recipe = recipes[catName];
+  let units = null;
+
+  if(recipe){
+    const ref = referenceComponent(recipe);
+    if(ref){
+      const refItem = items.find(i => i.id === ref.itemId);
+      const refHave = refItem ? (Number(refItem.qty) || 0) + (Number(refItem.qtyL) || 0) : 0;
+      const refQtyPerUnit = ref.qtyPerUnit || 1;
+      units = Math.floor(refHave / refQtyPerUnit);
+    }
+  }
+
+  if(units === null){
+    // No recipe (or no usable "top"/"center" reference component) to
+    // work the unit count out from automatically — ask instead.
+    const entered = prompt(`No recipe set up for "${catName}" yet, so units on hand can't be worked out automatically. How many "${catName}" units do you want to send to dispatch?`, '1');
+    if(entered === null) return;
+    const n = parseInt(entered, 10);
+    if(!Number.isFinite(n) || n <= 0){
+      alert('Enter a whole number greater than 0.');
+      return;
+    }
+    units = n;
+  }
+
+  if(units <= 0){
+    alert(`Not enough stock on hand to build a single "${catName}" unit yet.`);
+    return;
+  }
+
+  if(!confirm(`Build ${units} × "${catName}"? This sends one entry (qty ${units}) to the dispatch app and removes all ${catItems.length} component item(s) from this job's stock list. This can't be undone.`)) return;
   if(!firebaseDispatchBoardRef){
     alert('Not connected to the dispatch board yet — check your connection and try again.');
     return;
   }
 
-  const entries = [];
-  catItems.forEach(it => {
-    const handed = it.qtyL !== null && it.qtyL !== undefined;
-    if(handed){
-      const r = Number(it.qty) || 0;
-      const l = Number(it.qtyL) || 0;
-      if(r > 0) entries.push({ type: it.desc + ' — Right handed', qty: r, ref: '' });
-      if(l > 0) entries.push({ type: it.desc + ' — Left handed', qty: l, ref: '' });
-    } else {
-      const q = Number(it.qty) || 0;
-      if(q > 0) entries.push({ type: it.desc, qty: q, ref: '' });
-    }
-  });
-
   try{
-    if(entries.length > 0){
-      await sendBatchToDispatchUnfinished(entries);
-    }
+    await sendToDispatchUnfinished(catName, units, '');
     items = items.filter(it => groupKey(it) !== catName);
     await save();
     render();
