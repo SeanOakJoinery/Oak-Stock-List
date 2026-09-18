@@ -495,6 +495,8 @@
     <button class="ghost-btn" id="share-pdf-btn">Share PDF</button>
     <button class="ghost-btn" id="install-btn" style="display:none;">Install app</button>
     <button class="ghost-btn" id="order-list-btn" style="display:none;">Order list</button>
+    <button class="ghost-btn" id="import-cutting-list-btn" style="display:none;">Import cutting list</button>
+    <input type="file" id="import-cutting-list-file" accept=".xlsx,.xls,.csv" style="display:none;">
     <span class="ios-install-hint" id="ios-install-hint" style="display:none;">To install: tap Share, then "Add to Home Screen"</span>
   </div>
 
@@ -1455,6 +1457,89 @@ async function buildCategory(catName){
   }
 }
 
+// Imports a cutting list from an .xlsx/.xls/.csv file, per user
+// request ("make it that i can import a cutting list from excel").
+// Column headers are matched loosely (case-insensitive, a few common
+// names per field) since different exported sheets won't all use the
+// exact same wording. Only "Item"/"Description" is required — every
+// other column is optional. If the sheet has no Job/Category column,
+// it asks once which job to file every row under.
+async function importCuttingListFromExcel(file){
+  if(!can('addItems')) return;
+  try{
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, {type: 'array'});
+    const sheet = wb.Sheets[wb.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(sheet, {defval: ''});
+    if(rows.length === 0){
+      alert('That file has no rows to import.');
+      return;
+    }
+
+    const headerKeys = Object.keys(rows[0]);
+    const findCol = (...names) => headerKeys.find(h => names.includes(String(h).trim().toLowerCase()));
+    const colJob = findCol('job', 'category', 'category / job', 'cat');
+    const colDesc = findCol('item', 'description', 'desc', 'item description');
+    const colSize = findCol('size', 'dimensions');
+    const colLength = findCol('length');
+    const colWidth = findCol('width');
+    const colThickness = findCol('thickness');
+    const colMaterial = findCol('material');
+    const colQty = findCol('qty', 'quantity', 'qty right', 'qty r', 'qty - right handed', 'qty — right handed');
+    const colQtyL = findCol('qty l', 'qty left', 'left', 'qty - left handed', 'qty — left handed');
+    const colNotes = findCol('notes', 'note', 'comment', 'comments');
+
+    if(!colDesc){
+      alert('Couldn\'t find an "Item" / "Description" column in that file — check the column headers and try again.');
+      return;
+    }
+
+    let defaultJob = '';
+    if(!colJob){
+      const entered = prompt('This file has no "Job" / "Category" column — which job should these items be added to?', '');
+      if(entered === null) return;
+      defaultJob = entered.trim();
+    }
+
+    const newItems = [];
+    rows.forEach(row => {
+      const desc = String(row[colDesc] || '').trim();
+      if(!desc) return; // skip blank rows
+      const cat = (colJob ? String(row[colJob] || '').trim() : '') || defaultJob;
+      let size = colSize ? String(row[colSize] || '').trim() : '';
+      if(!size && (colLength || colWidth || colThickness)){
+        size = combineSizeParts(
+          colLength ? row[colLength] : '',
+          colWidth ? row[colWidth] : '',
+          colThickness ? row[colThickness] : ''
+        );
+      }
+      const material = colMaterial ? String(row[colMaterial] || '').trim() : '';
+      const notes = colNotes ? String(row[colNotes] || '').trim() : '';
+      const qty = colQty ? (Number(row[colQty]) || 0) : 0;
+      let qtyL = null;
+      if(colQtyL){
+        const raw = row[colQtyL];
+        if(raw !== '' && raw !== undefined && raw !== null) qtyL = Number(raw) || 0;
+      }
+      newItems.push({id: uid(), cat, desc, size, material, qty, qtyL, notes});
+    });
+
+    if(newItems.length === 0){
+      alert('No usable rows found in that file — make sure each row has an item description.');
+      return;
+    }
+
+    if(!confirm(`Import ${newItems.length} item(s) from "${file.name}"?`)) return;
+
+    items.push(...newItems);
+    await save();
+    render();
+  } catch(err){
+    alert('Could not read that file — make sure it\'s a valid Excel (.xlsx) or CSV file.');
+  }
+}
+
 async function deleteItem(id){
   if(!can('removeItems')) return;
   items = items.filter(i=>i.id!==id);
@@ -1607,6 +1692,15 @@ document.getElementById('in-desc').addEventListener('keydown', e=>{
 
 document.getElementById('print-btn').addEventListener('click', () => { if(can('exportData')) window.print(); });
 document.getElementById('order-list-btn').addEventListener('click', openOrderList);
+document.getElementById('import-cutting-list-btn').addEventListener('click', () => {
+  if(!can('addItems')) return;
+  document.getElementById('import-cutting-list-file').click();
+});
+document.getElementById('import-cutting-list-file').addEventListener('change', (e) => {
+  const file = e.target.files && e.target.files[0];
+  e.target.value = ''; // so picking the same file again still fires 'change'
+  if(file) importCuttingListFromExcel(file);
+});
 
 function buildStockPdfBlob(){
   const { jsPDF } = window.jspdf;
@@ -1898,6 +1992,7 @@ function applyPermissionsToUi(){
   set('add-card', can('addItems'));
   set('print-btn', can('exportData'));
   set('share-pdf-btn', can('exportData'));
+  set('import-cutting-list-btn', can('addItems'));
   // sync-settings-btn/dispatch-link-btn removed 2026-09-09 — nothing
   // left to configure for either since the Firebase migration; sync
   // status is now a plain read-only indicator (sync-status span),
