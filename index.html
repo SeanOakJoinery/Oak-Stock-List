@@ -631,6 +631,11 @@ function defaultPermissions(){
   return {
     addItems: false,    // Add/edit form + qty steppers
     removeItems: false, // Delete button
+    copyJobs: false,     // "copy" button on a job heading — duplicates
+                         // the job and, if present, its recipe. Kept
+                         // separate from addItems per user request, so
+                         // staff can be given this without also being
+                         // able to freely add/edit individual items.
     markBuilt: false,   // "Mark built" -> sends to dispatch app
     exportData: false,  // Print / Share PDF
     manageSync: false,  // No longer gates anything (sync has no settings
@@ -1097,12 +1102,14 @@ function render(){
       renameBtn.onclick = () => renameCategory(catName);
       left.appendChild(renameBtn);
     }
-    // Duplicates every item in this job/category into a new job with a
-    // new name, per user request ("copy a job and change the job name
-    // so when i have multiple jobs that is close to each other i dont
-    // have to type everything out"). Gated on addItems since it's
-    // fundamentally adding new items to the list.
-    if(can('addItems')){
+    // Duplicates every item in this job/category (and its recipe, if
+    // any) into a new job with a new name, per user request ("copy a
+    // job and change the job name so when i have multiple jobs that
+    // is close to each other i dont have to type everything out").
+    // Has its own dedicated copyJobs permission (kept separate from
+    // addItems per user request) so staff can be granted this without
+    // also getting full add/edit rights on individual items.
+    if(can('copyJobs')){
       const copyBtn = document.createElement('button');
       copyBtn.className = 'cat-rename-btn';
       copyBtn.textContent = 'copy';
@@ -1316,7 +1323,7 @@ async function renameCategory(oldName){
 }
 
 async function copyCategory(oldName){
-  if(!can('addItems')) return;
+  if(!can('copyJobs')) return;
   const newName = prompt(`Copy job "${oldName}" to a new job called:`, oldName + ' copy');
   if(newName === null) return;
   const trimmed = newName.trim();
@@ -1374,6 +1381,13 @@ async function copyCategory(oldName){
 // want it to create that unit for example wet bar... when i klick
 // build at the job name it has to delete the units underneath it and
 // put wet bar in the delivery app").
+// Job-level "build": always asks how many units to send to dispatch
+// (rather than auto-calculating from stock), then — per the job's
+// recipe — deducts only the quantity each component needs for that
+// many units, leaving the rest of the stock list untouched. Per user
+// request ("i want it to ask howmanny units i want to send to
+// dispatch and acording to the recipy only remove those cuntitys off
+// the stock list"). Needs a recipe to know what/how much to deduct.
 async function buildCategory(catName){
   if(!can('markBuilt')) return;
   const groupKey = (it) => (it.cat && it.cat.trim()) ? it.cat.trim() : 'Uncategorised';
@@ -1381,37 +1395,38 @@ async function buildCategory(catName){
   if(catItems.length === 0) return;
 
   const recipe = recipes[catName];
-  let units = null;
-
-  if(recipe){
-    const ref = referenceComponent(recipe);
-    if(ref){
-      const refItem = items.find(i => i.id === ref.itemId);
-      const refHave = refItem ? (Number(refItem.qty) || 0) + (Number(refItem.qtyL) || 0) : 0;
-      const refQtyPerUnit = ref.qtyPerUnit || 1;
-      units = Math.floor(refHave / refQtyPerUnit);
-    }
-  }
-
-  if(units === null){
-    // No recipe (or no usable "top"/"center" reference component) to
-    // work the unit count out from automatically — ask instead.
-    const entered = prompt(`No recipe set up for "${catName}" yet, so units on hand can't be worked out automatically. How many "${catName}" units do you want to send to dispatch?`, '1');
-    if(entered === null) return;
-    const n = parseInt(entered, 10);
-    if(!Number.isFinite(n) || n <= 0){
-      alert('Enter a whole number greater than 0.');
-      return;
-    }
-    units = n;
-  }
-
-  if(units <= 0){
-    alert(`Not enough stock on hand to build a single "${catName}" unit yet.`);
+  if(!recipe || !Array.isArray(recipe.components) || recipe.components.length === 0){
+    alert(`No recipe set up for "${catName}" yet — click "recipe" next to the job name to say how much of each item one unit needs, then build again.`);
     return;
   }
 
-  if(!confirm(`Build ${units} × "${catName}"? This sends one entry (qty ${units}) to the dispatch app and removes all ${catItems.length} component item(s) from this job's stock list. This can't be undone.`)) return;
+  const entered = prompt(`How many "${catName}" units do you want to send to dispatch?`, '1');
+  if(entered === null) return;
+  const units = parseInt(entered, 10);
+  if(!Number.isFinite(units) || units <= 0){
+    alert('Enter a whole number greater than 0.');
+    return;
+  }
+
+  // Warn (but don't block) if stock is short of what the recipe calls
+  // for — the deduction below still only takes what's actually there.
+  const shortages = [];
+  recipe.components.forEach(comp => {
+    const it = items.find(i => i.id === comp.itemId);
+    const have = it ? (Number(it.qty) || 0) + (Number(it.qtyL) || 0) : 0;
+    const required = comp.qtyPerUnit * units;
+    if(!it){
+      shortages.push('(a recipe component that no longer exists in the stock list)');
+    } else if(have < required){
+      shortages.push(`${it.desc}: need ${required}, have ${have}`);
+    }
+  });
+  if(shortages.length > 0){
+    if(!confirm(`Stock is short for ${units} × "${catName}":\n${shortages.join('\n')}\n\nBuild anyway? Quantities will be taken down to 0 where there isn't enough.`)) return;
+  } else {
+    if(!confirm(`Build ${units} × "${catName}"? This sends one entry (qty ${units}) to the dispatch app and deducts each recipe component's required quantity from stock.`)) return;
+  }
+
   if(!firebaseDispatchBoardRef){
     alert('Not connected to the dispatch board yet — check your connection and try again.');
     return;
@@ -1419,7 +1434,20 @@ async function buildCategory(catName){
 
   try{
     await sendToDispatchUnfinished(catName, units, '');
-    items = items.filter(it => groupKey(it) !== catName);
+    recipe.components.forEach(comp => {
+      const it = items.find(i => i.id === comp.itemId);
+      if(!it) return;
+      let remaining = comp.qtyPerUnit * units;
+      const q = Number(it.qty) || 0;
+      const fromQ = Math.min(q, remaining);
+      it.qty = q - fromQ;
+      remaining -= fromQ;
+      if(remaining > 0 && it.qtyL !== null && it.qtyL !== undefined){
+        const ql = Number(it.qtyL) || 0;
+        const fromQl = Math.min(ql, remaining);
+        it.qtyL = ql - fromQl;
+      }
+    });
     await save();
     render();
   } catch(e){
@@ -1883,6 +1911,7 @@ function applyPermissionsToUi(){
 const PERMISSION_LABELS = [
   ['addItems', 'Add / edit items'],
   ['removeItems', 'Remove items'],
+  ['copyJobs', 'Copy a job (with its recipe)'],
   ['markBuilt', 'Mark built (sends to dispatch app)'],
   ['exportData', 'Print / Share PDF'],
   ['manageSync', 'Manage Google Drive settings (dispatch app)'],
