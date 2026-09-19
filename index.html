@@ -497,6 +497,8 @@
     <button class="ghost-btn" id="order-list-btn" style="display:none;">Order list</button>
     <button class="ghost-btn" id="import-cutting-list-btn" style="display:none;">Import cutting list</button>
     <input type="file" id="import-cutting-list-file" accept=".xlsx,.xls,.csv" style="display:none;">
+    <button class="ghost-btn" id="returns-btn" style="display:none;">Sent to dispatch</button>
+    <button class="ghost-btn" id="activity-log-btn" style="display:none;">Activity log</button>
     <span class="ios-install-hint" id="ios-install-hint" style="display:none;">To install: tap Share, then "Add to Home Screen"</span>
   </div>
 
@@ -544,10 +546,13 @@
 <div id="userModalLayer"></div>
 <div id="orderListModalLayer"></div>
 <div id="recipeModalLayer"></div>
+<div id="returnsModalLayer"></div>
+<div id="activityLogModalLayer"></div>
 
 <script>
 const STORAGE_KEY = 'stock-items-v2';
 const RECIPES_STORAGE_KEY = 'stock-recipes-v1';
+const ACTIVITY_LOG_STORAGE_KEY = 'stock-activity-log-v1';
 
 const seedItems = [
   // Wet Bar
@@ -621,6 +626,23 @@ let items = [];
 // itemId is the source of truth for matching current stock levels.
 let recipes = {};
 let editingId = null;
+
+// Activity log — records who removed items and who sent items/units to
+// dispatch (and later, who returned a build), per user request ("i wat
+// a record if witch user removed items and send it to dispatch").
+// Synced alongside items/recipes in the same stockList Firebase path.
+// Capped to the most recent 300 entries so it can't grow unbounded.
+let activityLog = [];
+function logActivity(action, details){
+  const cu = getCurrentUser();
+  activityLog.push({
+    ts: Date.now(),
+    user: cu ? cu.username : 'Unknown',
+    action,
+    details
+  });
+  if(activityLog.length > 300) activityLog = activityLog.slice(activityLog.length - 300);
+}
 
 // Users & permissions — client-side only, NOT real security (see
 // dispatch app's dev notes for the full caveat — same limitation
@@ -760,9 +782,11 @@ function initFirebaseStockSync(){
       if(remote){
         items = Array.isArray(remote.items) ? remote.items : items;
         recipes = (remote.recipes && typeof remote.recipes === 'object') ? remote.recipes : recipes;
+        activityLog = Array.isArray(remote.activityLog) ? remote.activityLog : activityLog;
         try{
           localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
           localStorage.setItem(RECIPES_STORAGE_KEY, JSON.stringify(recipes));
+          localStorage.setItem(ACTIVITY_LOG_STORAGE_KEY, JSON.stringify(activityLog));
         } catch(e){}
         render();
       }
@@ -782,7 +806,7 @@ function initFirebaseStockSync(){
 
 function pushStockToFirebase(){
   if(!firebaseStockRef) return;
-  firebaseStockRef.set({ items, recipes }).catch(() => {});
+  firebaseStockRef.set({ items, recipes, activityLog }).catch(() => {});
 }
 
 // Debounces rapid-fire saves into one write ~800ms after the last
@@ -836,8 +860,8 @@ async function saveUsers(){
 // live-cached dispatchBoardCache (kept fresh by the listener above —
 // normally milliseconds old, not the multi-second gap a fresh jsonbin
 // fetch used to have) then writes back just the items path.
-async function sendToDispatchUnfinished(type, qty, ref){
-  await sendBatchToDispatchUnfinished([{ type, qty, ref }]);
+async function sendToDispatchUnfinished(type, qty, ref, meta){
+  await sendBatchToDispatchUnfinished([{ type, qty, ref, meta }]);
 }
 
 // Same as sendToDispatchUnfinished but writes several entries in one
@@ -857,7 +881,13 @@ async function sendBatchToDispatchUnfinished(entries){
       addedDate: new Date().toLocaleDateString('en-GB', {day:'2-digit', month:'long', year:'numeric'}),
       vinagedDate: null,
       dispatchedDate: null,
-      noteId: null
+      noteId: null,
+      // Extra fields (only present when this entry came from a job
+      // "build", carrying its recipe so a mistaken send can be undone
+      // — see buildCategory/openReturnsModal) — per user request
+      // ("write in the metadata the recipy so when a unit is
+      // incorectly sent to dispatch... the stock gets added back").
+      ...(e.meta || {})
     });
   });
   await firebaseDispatchBoardRef.child('items').set(dispatchItems);
@@ -938,6 +968,10 @@ async function load(){
     const rawRecipes = localStorage.getItem(RECIPES_STORAGE_KEY);
     recipes = rawRecipes ? JSON.parse(rawRecipes) : {};
   } catch(e){ recipes = {}; }
+  try{
+    const rawLog = localStorage.getItem(ACTIVITY_LOG_STORAGE_KEY);
+    activityLog = rawLog ? JSON.parse(rawLog) : [];
+  } catch(e){ activityLog = []; }
   render();
   checkForRecoverableData();
 
@@ -1013,6 +1047,7 @@ async function save(){
   try{
     localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
     localStorage.setItem(RECIPES_STORAGE_KEY, JSON.stringify(recipes));
+    localStorage.setItem(ACTIVITY_LOG_STORAGE_KEY, JSON.stringify(activityLog));
   } catch(e){
     console.error('Storage error', e);
   }
@@ -1434,22 +1469,41 @@ async function buildCategory(catName){
     return;
   }
 
+  // Precompute what will actually be taken from stock per component
+  // (may be less than the recipe calls for if stock is short — the
+  // warning above already covers that). This snapshot travels with
+  // the dispatch entry itself so a mistaken build can be reversed
+  // later from the exact amounts that were really deducted, via
+  // "Sent to dispatch" -> "Return to stock".
+  const recipeSnapshot = recipe.components.map(comp => {
+    const it = items.find(i => i.id === comp.itemId);
+    if(!it) return { itemId: comp.itemId, desc: comp.desc || '(deleted item)', deductQty: 0, deductQtyL: 0 };
+    let remaining = comp.qtyPerUnit * units;
+    const q = Number(it.qty) || 0;
+    const deductQty = Math.min(q, remaining);
+    remaining -= deductQty;
+    let deductQtyL = 0;
+    if(remaining > 0 && it.qtyL !== null && it.qtyL !== undefined){
+      const ql = Number(it.qtyL) || 0;
+      deductQtyL = Math.min(ql, remaining);
+    }
+    return { itemId: it.id, desc: it.desc, deductQty, deductQtyL };
+  });
+
   try{
-    await sendToDispatchUnfinished(catName, units, '');
-    recipe.components.forEach(comp => {
-      const it = items.find(i => i.id === comp.itemId);
-      if(!it) return;
-      let remaining = comp.qtyPerUnit * units;
-      const q = Number(it.qty) || 0;
-      const fromQ = Math.min(q, remaining);
-      it.qty = q - fromQ;
-      remaining -= fromQ;
-      if(remaining > 0 && it.qtyL !== null && it.qtyL !== undefined){
-        const ql = Number(it.qtyL) || 0;
-        const fromQl = Math.min(ql, remaining);
-        it.qtyL = ql - fromQl;
-      }
+    await sendToDispatchUnfinished(catName, units, '', {
+      fromStockApp: true,
+      sourceCat: catName,
+      sourceUnits: units,
+      recipeSnapshot
     });
+    recipeSnapshot.forEach(d => {
+      const it = items.find(i => i.id === d.itemId);
+      if(!it) return;
+      it.qty = (Number(it.qty) || 0) - d.deductQty;
+      if(it.qtyL !== null && it.qtyL !== undefined) it.qtyL = (Number(it.qtyL) || 0) - d.deductQtyL;
+    });
+    logActivity('buildJob', { cat: catName, units });
     await save();
     render();
   } catch(e){
@@ -1540,9 +1594,152 @@ async function importCuttingListFromExcel(file){
   }
 }
 
+// "Sent to dispatch" panel: lists job builds sent from this app (the
+// ones carrying a recipeSnapshot) so a mistaken one can be reversed —
+// per user request ("when a unit is incorectly sent to dispatch when
+// it gets send back from dispatch that the stock gets added back").
+// "Return to stock" both restocks the exact amounts that were
+// deducted and removes the entry from the dispatch board.
+function closeReturnsModal(){
+  document.getElementById('returnsModalLayer').innerHTML = '';
+}
+
+function openReturnsModal(){
+  if(!can('markBuilt')) return;
+  const layer = document.getElementById('returnsModalLayer');
+  const entries = (Array.isArray(dispatchBoardCache.items) ? dispatchBoardCache.items : [])
+    .filter(it => it && it.fromStockApp && Array.isArray(it.recipeSnapshot))
+    .sort((a, b) => (b.addedDate || '').localeCompare(a.addedDate || ''));
+
+  let rowsHtml = '';
+  if(entries.length === 0){
+    rowsHtml = '<p class="modal-desc">Nothing here yet — job builds sent from this app (via the "build" button) show up here so a mistaken one can be sent back.</p>';
+  } else {
+    const iAmRoot = currentUserIsRoot();
+    entries.forEach(e => {
+      rowsHtml += `<div style="padding:8px 0;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;gap:10px;">
+        <div>
+          <div style="font-weight:600;">${escapeHtml(e.type)} — qty ${e.qty}</div>
+          <div style="font-size:12px;color:var(--ink-soft);">Sent ${escapeHtml(e.addedDate || '')}</div>
+        </div>
+        ${iAmRoot
+          ? `<button class="ghost-btn" style="border-color:var(--danger);color:var(--danger);white-space:nowrap;" onclick="returnBuildToStock('${e.id}')">Return to stock</button>`
+          : '<span style="font-size:12px;color:var(--ink-soft);white-space:nowrap;">Root only to return</span>'}
+      </div>`;
+    });
+  }
+
+  layer.innerHTML = `<div class="modal-overlay" id="returnsOverlay">
+    <div class="modal" style="max-width:520px;">
+      <h3>Sent to dispatch</h3>
+      <p class="modal-desc">Job builds sent from this app. Use "Return to stock" if one was sent by mistake.</p>
+      <div id="returnsRows">${rowsHtml}</div>
+      <div class="modal-actions">
+        <button class="modal-close" onclick="closeReturnsModal()">Close</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+async function returnBuildToStock(dispatchItemId){
+  if(!currentUserIsRoot()) return;
+  const entry = (dispatchBoardCache.items || []).find(it => it.id === dispatchItemId);
+  if(!entry || !Array.isArray(entry.recipeSnapshot)){
+    alert('That dispatch entry no longer has recipe details to restore from.');
+    return;
+  }
+  if(!confirm(`Return "${entry.type}" (qty ${entry.qty}) to stock? This adds the recipe's components back into this stock list and removes the entry from the dispatch app. This can't be undone.`)) return;
+  if(!firebaseDispatchBoardRef){
+    alert('Not connected to the dispatch board yet — check your connection and try again.');
+    return;
+  }
+
+  const missing = [];
+  entry.recipeSnapshot.forEach(d => {
+    const it = items.find(i => i.id === d.itemId);
+    if(!it){
+      if(d.deductQty || d.deductQtyL) missing.push(d.desc || d.itemId);
+      return;
+    }
+    it.qty = (Number(it.qty) || 0) + (d.deductQty || 0);
+    if(d.deductQtyL) it.qtyL = (Number(it.qtyL) || 0) + d.deductQtyL;
+  });
+
+  try{
+    const remaining = (dispatchBoardCache.items || []).filter(it => it.id !== dispatchItemId);
+    await firebaseDispatchBoardRef.child('items').set(remaining);
+    logActivity('returnFromDispatch', { cat: entry.sourceCat || entry.type, units: entry.sourceUnits || entry.qty });
+    await save();
+    render();
+    openReturnsModal();
+    if(missing.length > 0){
+      alert(`Returned to stock, but these components no longer exist in the stock list so couldn't be restocked: ${missing.join(', ')}`);
+    }
+  } catch(e){
+    alert('Could not update the dispatch app — check the link settings and try again.');
+  }
+}
+
+// Root-only activity log viewer — per user request ("i wat a record
+// if witch user removed items and send it to dispatch").
+function activityLineText(entry){
+  const d = entry.details || {};
+  switch(entry.action){
+    case 'removeItem':
+      return `removed ${d.desc || '(item)'}${d.size ? ' — ' + d.size : ''} from "${d.cat || 'Uncategorised'}" (had ${d.qty || 0}${(d.qtyL !== null && d.qtyL !== undefined) ? ' / ' + d.qtyL : ''})`;
+    case 'sendToDispatch':
+      return `sent ${d.qty} × ${d.desc || '(item)'} from "${d.cat || 'Uncategorised'}" to dispatch`;
+    case 'buildJob':
+      return `built ${d.units} × "${d.cat}" and sent to dispatch`;
+    case 'returnFromDispatch':
+      return `returned ${d.units || ''} × "${d.cat}" from dispatch back to stock`;
+    default:
+      return entry.action;
+  }
+}
+
+function closeActivityLogModal(){
+  document.getElementById('activityLogModalLayer').innerHTML = '';
+}
+
+function openActivityLogModal(){
+  if(!currentUserIsRoot()) return;
+  const layer = document.getElementById('activityLogModalLayer');
+  const entries = [...activityLog].sort((a, b) => b.ts - a.ts).slice(0, 150);
+  let rowsHtml = '';
+  if(entries.length === 0){
+    rowsHtml = '<p class="modal-desc">No activity recorded yet.</p>';
+  } else {
+    entries.forEach(e => {
+      const when = new Date(e.ts).toLocaleString('en-GB');
+      rowsHtml += `<div style="padding:6px 0;border-bottom:1px solid var(--line);font-size:13px;">
+        <span style="color:var(--ink-soft);">${escapeHtml(when)}</span> — <b>${escapeHtml(e.user)}</b> ${escapeHtml(activityLineText(e))}
+      </div>`;
+    });
+  }
+  layer.innerHTML = `<div class="modal-overlay" id="activityLogOverlay">
+    <div class="modal" style="max-width:560px;">
+      <h3>Activity log</h3>
+      <p class="modal-desc">Who removed items and who sent items/units to dispatch (most recent first).</p>
+      <div style="max-height:60vh;overflow-y:auto;">${rowsHtml}</div>
+      <div class="modal-actions">
+        <button class="modal-close" onclick="closeActivityLogModal()">Close</button>
+      </div>
+    </div>
+  </div>`;
+}
+
 async function deleteItem(id){
   if(!can('removeItems')) return;
+  const it = items.find(i => i.id === id);
   items = items.filter(i=>i.id!==id);
+  if(it){
+    logActivity('removeItem', {
+      cat: (it.cat && it.cat.trim()) ? it.cat.trim() : 'Uncategorised',
+      desc: it.desc, size: it.size || '', material: it.material || '',
+      qty: it.qty || 0, qtyL: (it.qtyL === null || it.qtyL === undefined) ? null : it.qtyL
+    });
+  }
   await save();
   render();
 }
@@ -1648,8 +1845,26 @@ async function confirmMarkBuilt(){
   btn.disabled = true;
   try{
     const label = it.desc + (side ? (side === 'R' ? ' — Right handed' : ' — Left handed') : '');
-    await sendToDispatchUnfinished(label, qty, '');
+    // Same recipeSnapshot shape a job build uses (just one component:
+    // this item) so a per-item send also shows up in "Sent to
+    // dispatch" and can be reversed with "Return to stock" — per user
+    // request ("yes i want that coverd ass well").
+    await sendToDispatchUnfinished(label, qty, '', {
+      fromStockApp: true,
+      sourceCat: (it.cat && it.cat.trim()) ? it.cat.trim() : 'Uncategorised',
+      sourceUnits: qty,
+      recipeSnapshot: [{
+        itemId: it.id,
+        desc: it.desc,
+        deductQty: side === 'L' ? 0 : qty,
+        deductQtyL: side === 'L' ? qty : 0
+      }]
+    });
     it[field] = available - qty;
+    logActivity('sendToDispatch', {
+      cat: (it.cat && it.cat.trim()) ? it.cat.trim() : 'Uncategorised',
+      desc: label, qty
+    });
     await save();
     render();
     document.getElementById('mark-built-modal-overlay').style.display = 'none';
@@ -1701,6 +1916,8 @@ document.getElementById('import-cutting-list-file').addEventListener('change', (
   e.target.value = ''; // so picking the same file again still fires 'change'
   if(file) importCuttingListFromExcel(file);
 });
+document.getElementById('returns-btn').addEventListener('click', openReturnsModal);
+document.getElementById('activity-log-btn').addEventListener('click', openActivityLogModal);
 
 function buildStockPdfBlob(){
   const { jsPDF } = window.jspdf;
@@ -1993,6 +2210,8 @@ function applyPermissionsToUi(){
   set('print-btn', can('exportData'));
   set('share-pdf-btn', can('exportData'));
   set('import-cutting-list-btn', can('addItems'));
+  set('returns-btn', can('markBuilt'));
+  set('activity-log-btn', currentUserIsRoot());
   // sync-settings-btn/dispatch-link-btn removed 2026-09-09 — nothing
   // left to configure for either since the Firebase migration; sync
   // status is now a plain read-only indicator (sync-status span),
