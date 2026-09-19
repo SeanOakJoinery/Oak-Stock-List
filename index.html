@@ -1519,7 +1519,7 @@ async function buildCategory(catName){
 // other column is optional. If the sheet has no Job/Category column,
 // it asks once which job to file every row under.
 async function importCuttingListFromExcel(file){
-  if(!can('addItems')) return;
+  if(!currentUserIsRoot()) return;
   try{
     const buf = await file.arrayBuffer();
     const wb = XLSX.read(buf, {type: 'array'});
@@ -1908,7 +1908,7 @@ document.getElementById('in-desc').addEventListener('keydown', e=>{
 document.getElementById('print-btn').addEventListener('click', () => { if(can('exportData')) window.print(); });
 document.getElementById('order-list-btn').addEventListener('click', openOrderList);
 document.getElementById('import-cutting-list-btn').addEventListener('click', () => {
-  if(!can('addItems')) return;
+  if(!currentUserIsRoot()) return;
   document.getElementById('import-cutting-list-file').click();
 });
 document.getElementById('import-cutting-list-file').addEventListener('change', (e) => {
@@ -2209,7 +2209,7 @@ function applyPermissionsToUi(){
   set('add-card', can('addItems'));
   set('print-btn', can('exportData'));
   set('share-pdf-btn', can('exportData'));
-  set('import-cutting-list-btn', can('addItems'));
+  set('import-cutting-list-btn', currentUserIsRoot());
   set('returns-btn', can('markBuilt'));
   set('activity-log-btn', currentUserIsRoot());
   // sync-settings-btn/dispatch-link-btn removed 2026-09-09 — nothing
