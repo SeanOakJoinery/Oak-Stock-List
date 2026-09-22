@@ -653,8 +653,10 @@ let currentUserId = null;
 
 function defaultPermissions(){
   return {
-    addItems: false,    // Add/edit form + qty steppers
-    removeItems: false, // Delete button
+    stockAddQty: false,    // "+" stepper button and the Add-item form
+    stockRemoveQty: false, // "−" stepper button (minimizing stock)
+    stockEditItems: false, // "edit" button — item description/category/size/material
+    removeItems: false,    // Delete button (removes a line entirely)
     copyJobs: false,     // "copy" button on a job heading — duplicates
                          // the job and, if present, its recipe. Kept
                          // separate from addItems per user request, so
@@ -678,7 +680,27 @@ function can(key){
   const u = getCurrentUser();
   if(!u) return false;
   if(u.isRoot) return true;
-  return !!(u.permissions && u.permissions[key]);
+  if(!u.permissions) return false;
+  // MIGRATION (2026-09-21): addItems used to gate the "+"/"−" steppers,
+  // the Add-item form, AND the edit button all at once here — split
+  // per user request into stockAddQty/stockRemoveQty/stockEditItems so
+  // root can grant them independently. Anyone already granted the old
+  // addItems who hasn't had these three explicitly set yet keeps their
+  // current ability rather than being silently locked out the moment
+  // this deploys — root can then narrow each person down deliberately
+  // in Manage Users, which sets a real true/false and overrides this.
+  // NOTE: this app's OLD "addItems" key was ALSO, confusingly, the same
+  // shared field Dispatch uses for its own unrelated "add board items"
+  // permission — a pre-existing collision, not introduced by this
+  // change. The new stockAddQty/stockRemoveQty/stockEditItems keys are
+  // properly namespaced so this can't happen again going forward.
+  if((key === 'stockAddQty' || key === 'stockEditItems') && u.permissions[key] === undefined && u.permissions.addItems){
+    return true;
+  }
+  if(key === 'stockRemoveQty' && u.permissions[key] === undefined && u.permissions.addItems){
+    return true;
+  }
+  return !!u.permissions[key];
 }
 
 function currentUserIsRoot(){
@@ -693,10 +715,10 @@ function currentUserIsRoot(){
 // ONLY line that differs between the two apps' copies of this block —
 // keep them otherwise identical.
 const APP_ID = 'stock';
-const APP_LABELS = { dispatch: 'Dispatch app', stock: 'Stock List app' };
+const APP_LABELS = { dispatch: 'Dispatch app', stock: 'Stock List app', boardStock: 'Board Stock app', consumables: 'Consumables app' };
 
 function defaultApps(){
-  return { dispatch: true, stock: true };
+  return { dispatch: true, stock: true, boardStock: true, consumables: true };
 }
 
 function getMainRoot(){
@@ -1233,7 +1255,7 @@ function render(){
 
       const actions = document.createElement('div');
       actions.className = 'item-actions';
-      if(can('addItems')){
+      if(can('stockEditItems')){
         const editBtn = document.createElement('button');
         editBtn.className = 'icon-btn';
         editBtn.innerHTML = 'edit';
@@ -1281,27 +1303,31 @@ function buildStepper(item, field, label){
   val.className = 'step-val';
   val.textContent = (item[field] === null || item[field] === undefined) ? 0 : item[field];
 
-  if(can('addItems')){
+  const canMinus = can('stockRemoveQty');
+  const canPlus = can('stockAddQty');
+  if(canMinus){
     const minus = document.createElement('button');
     minus.textContent = '−';
     minus.setAttribute('aria-label', 'Subtract');
     minus.onclick = () => adjustQty(item.id, field, -1);
     wrap.appendChild(minus);
-    wrap.appendChild(val);
+  }
+  wrap.appendChild(val);
+  if(canPlus){
     const plus = document.createElement('button');
     plus.textContent = '+';
     plus.setAttribute('aria-label', 'Add');
     plus.onclick = () => adjustQty(item.id, field, 1);
     wrap.appendChild(plus);
-  } else {
-    wrap.appendChild(val);
   }
 
   return wrap;
 }
 
 async function adjustQty(id, field, delta){
-  if(!can('addItems')) return;
+  // "+" and "−" are independently permissioned per user request.
+  if(delta > 0 && !can('stockAddQty')) return;
+  if(delta < 0 && !can('stockRemoveQty')) return;
   const it = items.find(i=>i.id===id);
   if(!it) return;
   const current = Number(it[field]) || 0;
@@ -1315,7 +1341,7 @@ function escapeHtml(s){
 }
 
 function startEdit(id){
-  if(!can('addItems')) return;
+  if(!can('stockEditItems')) return;
   const it = items.find(i=>i.id===id);
   if(!it) return;
   editingId = id;
@@ -1745,7 +1771,7 @@ async function deleteItem(id){
 }
 
 async function handleAdd(){
-  if(!can('addItems')) return;
+  if(!can('stockAddQty')) return;
   const desc = document.getElementById('in-desc').value.trim();
   const cat = document.getElementById('in-cat').value.trim();
   const length = document.getElementById('in-size-length').value.trim();
@@ -2206,7 +2232,7 @@ function applyPermissionsToUi(){
     const el = document.getElementById(id);
     if(el) el.style.display = visible ? '' : 'none';
   };
-  set('add-card', can('addItems'));
+  set('add-card', can('stockAddQty'));
   set('print-btn', can('exportData'));
   set('share-pdf-btn', can('exportData'));
   set('import-cutting-list-btn', currentUserIsRoot());
@@ -2223,12 +2249,14 @@ function applyPermissionsToUi(){
 }
 
 const PERMISSION_LABELS = [
-  ['addItems', 'Add / edit items'],
-  ['removeItems', 'Remove items'],
+  ['stockAddQty', 'Add stock (+ button, add new items)'],
+  ['stockRemoveQty', 'Minimize stock (− button)'],
+  ['stockEditItems', 'Edit item details'],
+  ['removeItems', 'Remove items (delete a line entirely)'],
   ['copyJobs', 'Copy a job (with its recipe)'],
   ['markBuilt', 'Mark built (sends to dispatch app)'],
   ['exportData', 'Print / Share PDF'],
-  ['manageSync', 'Manage Google Drive settings (dispatch app)'],
+  ['manageSync', "No longer used — Google Drive was removed from the dispatch app"],
   ['manageUsers', 'Manage users']
 ];
 
