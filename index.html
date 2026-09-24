@@ -791,6 +791,86 @@ let firebaseDispatchFirstSnapshotReceived = false;
 let dispatchBoardCache = { items: [], notes: [], users: [], nextNo: 1, itemTypes: [] };
 let firebaseConnected = false;
 
+// ===================== SAFE MERGE SYNC =====================
+// Before: every save did firebaseStockRef.set({...everything...}) from
+// this device's copy, so anything another device or app wrote in the
+// meantime (e.g. stock returned from Dispatch, or a change made on
+// another phone) was silently wiped.
+// Now each save works out only what THIS device changed since it last
+// heard from the server (added / edited / deleted, matched by id) and
+// applies just those changes on top of the server's current data, in a
+// transaction so two simultaneous saves can't overwrite each other.
+let stockBase = null;         // last copy of stockList this device got from the server
+let stockDirty = false;       // a local change is waiting for the debounce timer
+let stockInFlight = false;    // a save is currently being sent
+
+function syncClone(x){ return x === undefined ? null : JSON.parse(JSON.stringify(x)); }
+function syncList(v){
+  if(Array.isArray(v)) return v.filter(x => x !== null && x !== undefined);
+  if(v && typeof v === 'object') return Object.values(v);
+  return [];
+}
+function mergeSyncList(baseIn, localIn, remoteIn){
+  const base = syncList(baseIn), local = syncList(localIn), remote = syncList(remoteIn);
+  const all = base.concat(local, remote);
+  const byId = all.every(x => x && typeof x === 'object' && x.id !== undefined && x.id !== null);
+  if(!byId){
+    // Plain lists (driver names, item types): set-style merge.
+    const k = x => JSON.stringify(x);
+    const baseKeys = new Set(base.map(k)), localKeys = new Set(local.map(k));
+    const removedHere = new Set(base.filter(x => !localKeys.has(k(x))).map(k));
+    const out = remote.filter(x => !removedHere.has(k(x)));
+    const outKeys = new Set(out.map(k));
+    local.forEach(x => { if(!baseKeys.has(k(x)) && !outKeys.has(k(x))){ out.push(x); outKeys.add(k(x)); } });
+    return out;
+  }
+  const baseMap = new Map(base.map(x => [x.id, x]));
+  const localMap = new Map(local.map(x => [x.id, x]));
+  const changedHere = id => {
+    const l = localMap.get(id), b = baseMap.get(id);
+    return !!l && (!b || JSON.stringify(l) !== JSON.stringify(b));
+  };
+  const out = [];
+  const seen = new Set();
+  remote.forEach(r => {
+    seen.add(r.id);
+    if(baseMap.has(r.id) && !localMap.has(r.id)) return;        // deleted on this device
+    out.push(changedHere(r.id) ? localMap.get(r.id) : r);         // edited here wins, otherwise server copy
+  });
+  local.forEach(l => {
+    if(seen.has(l.id)) return;
+    if(!baseMap.has(l.id)) { out.push(l); return; }               // added on this device
+    if(changedHere(l.id)) out.push(l);                            // edited here but deleted elsewhere: keep the edit
+  });
+  return out;
+}
+function mergeSyncObject(base, local, remote){
+  base = base || {}; local = local || {}; remote = remote || {};
+  const out = {};
+  Object.keys(remote).forEach(k => {
+    if(k in base && !(k in local)) return;                                   // deleted here
+    const changedHere = (k in local) && (!(k in base) || JSON.stringify(local[k]) !== JSON.stringify(base[k]));
+    out[k] = changedHere ? local[k] : remote[k];
+  });
+  Object.keys(local).forEach(k => {
+    if(k in out) return;
+    if(!(k in base)) { out[k] = local[k]; return; }                          // added here
+    if(JSON.stringify(local[k]) !== JSON.stringify(base[k])) out[k] = local[k]; // edited here, deleted elsewhere
+  });
+  return out;
+}
+// Works on the plain (decoded) recipe names; encoding happens only at the Firebase boundary.
+function mergeStockData(base, local, remote){
+  base = base || {}; remote = remote || {};
+  const log = mergeSyncList(base.activityLog, local.activityLog, remote.activityLog)
+    .sort((a, b) => (a.ts || 0) - (b.ts || 0));
+  return {
+    items: mergeSyncList(base.items, local.items, remote.items),
+    recipes: mergeSyncObject(base.recipes, local.recipes, remote.recipes),
+    activityLog: log.length > 300 ? log.slice(log.length - 300) : log
+  };
+}
+
 function initFirebaseStockSync(){
   return new Promise((resolve) => {
     firebase.database().ref('.info/connected').on('value', (snap) => {
@@ -802,9 +882,19 @@ function initFirebaseStockSync(){
     firebaseStockRef.on('value', (snapshot) => {
       const remote = snapshot.val();
       if(remote){
-        items = Array.isArray(remote.items) ? remote.items : items;
-        recipes = (remote.recipes && typeof remote.recipes === 'object') ? decodeRecipeKeys(remote.recipes) : recipes;
-        activityLog = Array.isArray(remote.activityLog) ? remote.activityLog : activityLog;
+        const remotePlain = {
+          items: remote.items ? syncList(remote.items) : items,
+          recipes: (remote.recipes && typeof remote.recipes === 'object') ? decodeRecipeKeys(remote.recipes) : {},
+          activityLog: remote.activityLog ? syncList(remote.activityLog) : []
+        };
+        // Keep a change this device hasn't finished saving yet, re-applied on top.
+        const applied = ((stockDirty || stockInFlight) && stockBase)
+          ? mergeStockData(stockBase, { items, recipes, activityLog }, remotePlain)
+          : remotePlain;
+        stockBase = syncClone(remotePlain);
+        items = applied.items;
+        recipes = applied.recipes;
+        activityLog = applied.activityLog;
         try{
           localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
           localStorage.setItem(RECIPES_STORAGE_KEY, JSON.stringify(recipes));
@@ -858,11 +948,30 @@ function reportStockSaveFailure(err){
 }
 function pushStockToFirebase(){
   if(!firebaseStockRef) return;
+  const local = syncClone({ items, recipes, activityLog });
+  const base = stockBase;
+  stockDirty = false;
+  stockInFlight = true;
   try{
-    firebaseStockRef.set({ items, recipes: encodeRecipeKeys(recipes), activityLog })
-      .then(() => setSyncStatus(firebaseConnected ? 'Synced (live)' : 'Reconnecting…', !firebaseConnected))
-      .catch(reportStockSaveFailure);
+    firebaseStockRef.transaction(current => {
+      if(!current) return { items: local.items, recipes: encodeRecipeKeys(local.recipes), activityLog: local.activityLog };
+      const remotePlain = {
+        items: syncList(current.items),
+        recipes: decodeRecipeKeys(current.recipes || {}),
+        activityLog: syncList(current.activityLog)
+      };
+      const merged = mergeStockData(base, local, remotePlain);
+      return { items: merged.items, recipes: encodeRecipeKeys(merged.recipes), activityLog: merged.activityLog };
+    }).then(res => {
+      stockInFlight = false;
+      if(res && res.committed && res.snapshot){
+        const v = res.snapshot.val() || {};
+        stockBase = { items: syncList(v.items), recipes: decodeRecipeKeys(v.recipes || {}), activityLog: syncList(v.activityLog) };
+      }
+      setSyncStatus(firebaseConnected ? 'Synced (live)' : 'Reconnecting…', !firebaseConnected);
+    }).catch(err => { stockInFlight = false; stockDirty = true; reportStockSaveFailure(err); });
   } catch(e){
+    stockInFlight = false; stockDirty = true;
     reportStockSaveFailure(e);
   }
 }
@@ -872,6 +981,7 @@ function pushStockToFirebase(){
 // rate-limit concerns to justify it anymore — this is really just to
 // avoid a write per keystroke while someone's typing.
 function queuePushStockToFirebase(){
+  stockDirty = true;
   clearTimeout(firebaseStockPushTimer);
   firebaseStockPushTimer = setTimeout(pushStockToFirebase, 800);
 }
@@ -930,9 +1040,12 @@ async function sendBatchToDispatchUnfinished(entries){
   if(!firebaseDispatchBoardRef){
     throw new Error('Not connected to the dispatch board yet — try again in a moment.');
   }
-  const dispatchItems = Array.isArray(dispatchBoardCache.items) ? dispatchBoardCache.items.slice() : [];
+  // Built against the SERVER's current list inside a transaction, not the
+  // local cache — if the cache was empty/stale (e.g. right after opening
+  // the app) the old code could overwrite Dispatch's whole item list.
+  const newItems = [];
   entries.forEach(e => {
-    dispatchItems.push({
+    newItems.push({
       id: uid(),
       type: e.type, qty: e.qty, ref: e.ref || '',
       status: 'unvinaged',
@@ -948,7 +1061,10 @@ async function sendBatchToDispatchUnfinished(entries){
       ...(e.meta || {})
     });
   });
-  await firebaseDispatchBoardRef.child('items').set(dispatchItems);
+  await firebaseDispatchBoardRef.child('items').transaction(current => {
+    const list = Array.isArray(current) ? current : (current && typeof current === 'object' ? Object.values(current) : []);
+    return list.concat(newItems);
+  });
 }
 
 function uid(){ return 'i' + Date.now() + Math.random().toString(36).slice(2,7); }
@@ -1728,8 +1844,10 @@ async function returnBuildToStock(dispatchItemId){
   });
 
   try{
-    const remaining = (dispatchBoardCache.items || []).filter(it => it.id !== dispatchItemId);
-    await firebaseDispatchBoardRef.child('items').set(remaining);
+    await firebaseDispatchBoardRef.child('items').transaction(current => {
+      const list = Array.isArray(current) ? current : (current && typeof current === 'object' ? Object.values(current) : []);
+      return list.filter(it => it && it.id !== dispatchItemId);
+    });
     logActivity('returnFromDispatch', { cat: entry.sourceCat || entry.type, units: entry.sourceUnits || entry.qty });
     await save();
     render();
@@ -2450,10 +2568,14 @@ function buildOrderListData(catFilter){
     const refItem = items.find(i => i.id === ref.itemId);
     const refHave = refItem ? (Number(refItem.qty) || 0) + (Number(refItem.qtyL) || 0) : 0;
     const refQtyPerUnit = ref.qtyPerUnit || 1;
-    const units = Math.floor(refHave / refQtyPerUnit);
+    // If the "top"/"center" part itself hasn't been cut yet (0 on hand),
+    // the old maths worked out 0 units and so listed NOTHING as missing —
+    // not even the top. Now at least one unit is always assumed, and the
+    // reference part is checked too, so a job with no top cut yet still
+    // gets a full cutting list for one unit.
+    const units = Math.max(1, Math.floor(refHave / refQtyPerUnit));
 
     recipe.components.forEach(comp => {
-      if(comp === ref) return; // the reference item defines the units, it isn't ordered against itself
       const it = items.find(i => i.id === comp.itemId);
       const have = it ? (Number(it.qty) || 0) + (Number(it.qtyL) || 0) : 0;
       const required = comp.qtyPerUnit * units;
