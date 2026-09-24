@@ -19,6 +19,7 @@
      bundler in this file, so no ES-module scoping headaches. -->
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-database-compat.js"></script>
+<script src="https://seanoakjoinery.github.io/oak-core/oak-core.js?v=1"></script>
 <script>
   const firebaseConfig = {
     apiKey: "AIzaSyCkoUkLIlxdxD2AAEpLGW4dzqkSeC5lVh0",
@@ -710,14 +711,22 @@ function currentUserIsRoot(){
   return !!(u && u.isRoot);
 }
 
-// --- PER-APP ACCESS (added 2026-09-11) ---------------------------------
-// users[] is shared between this app and the Dispatch app (same Firebase
-// 'dispatchBoard' node), so a single account can now be scoped to one
-// app or both. u.apps = { dispatch: bool, stock: bool }. APP_ID is the
-// ONLY line that differs between the two apps' copies of this block —
-// keep them otherwise identical.
+// --- PER-APP ACCESS / SHARED AUTH ------------------------------------
+// Oak Core cutover 2026-09-24: users sync/save + hashPin via
+// https://seanoakjoinery.github.io/oak-core/oak-core.js?v=1 — rollback
+// branch backup-before-oak-core-2026-09-24
+// users[] is shared with Dispatch / Board / Consumables via OakCore.
+// This app's OWN data (items/recipes/activityLog) stays at stockList.
 const APP_ID = 'stock';
 const APP_LABELS = { dispatch: 'Dispatch app', stock: 'Stock List app', boardStock: 'Board Stock app', consumables: 'Consumables app' };
+
+let oak = null;
+if (window.OakCore && window.firebase) {
+  try {
+    oak = OakCore.createApp({ appId: 'stock', readOnly: false });
+    oak.init();
+  } catch(e){ console.warn('OakCore init failed:', e); }
+}
 
 function defaultApps(){
   return { dispatch: true, stock: true, boardStock: true, consumables: true };
@@ -744,11 +753,7 @@ function userHasApp(u, appId){
   return !!u.apps[appId];
 }
 
-async function hashPin(pin){
-  const enc = new TextEncoder().encode(pin);
-  const buf = await crypto.subtle.digest('SHA-256', enc);
-  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
-}
+async function hashPin(pin){ return OakCore.hashPin(pin); }
 
 const loginAttempts = {};
 const MAX_LOGIN_ATTEMPTS = 5;
@@ -776,15 +781,10 @@ function resetIdleTimer(){
 // Two independent live paths in the SAME Firebase project the dispatch
 // app uses:
 //   'stockList'     — this app's own items[]/recipes{}
-//   'dispatchBoard' — the dispatch app's shared board; this app only
-//                     ever reads/writes the users[] and items[] fields
-//                     on it (for shared logins and "Mark built"
-//                     respectively) — never the whole object, so this
-//                     app can't clobber the dispatch app's notes/
-//                     itemTypes/etc the way the old jsonbin read-
-//                     modify-write (fetchDispatchBoard +
-//                     writeDispatchBoard) theoretically could if timed
-//                     badly.
+//   'dispatchBoard' — still used for items[] ("Mark built" / send to
+//                     dispatch). Shared users sync/save now goes through
+//                     OakCore (see SHARED AUTH above), not a direct
+//                     users[] write on this ref.
 let firebaseStockRef = null;
 let firebaseStockFirstSnapshotReceived = false;
 let firebaseStockPushTimer = null;
@@ -990,15 +990,13 @@ function queuePushStockToFirebase(){
 
 function initFirebaseDispatchLink(){
   return new Promise((resolve) => {
+    // Still used for dispatchBoard/items (stock→dispatch handoff).
+    // Shared users sync/save now goes through OakCore (see SHARED AUTH).
     firebaseDispatchBoardRef = firebase.database().ref('dispatchBoard');
     firebaseDispatchBoardRef.on('value', (snapshot) => {
       const remote = snapshot.val();
       if(remote){
         dispatchBoardCache = remote;
-        users = Array.isArray(remote.users) ? remote.users : users;
-        saveUsersLocal();
-        renderUserBadge();
-        applyPermissionsToUi();
         render();
       }
       if(!firebaseDispatchFirstSnapshotReceived){
@@ -1014,16 +1012,29 @@ function initFirebaseDispatchLink(){
   });
 }
 
-// Writes the current users[] straight to the dispatch board's users
-// path only (a partial-path write via .child('users')) — never the
-// whole board object, so this can never clobber the dispatch app's own
-// items/notes/etc no matter how it's timed.
+// Writes users[] via OakCore (shared dispatchBoard/users path).
 async function saveUsers(){
   saveUsersLocal();
-  if(!firebaseDispatchBoardRef) return;
+  if(!oak) return;
   try{
-    await firebaseDispatchBoardRef.child('users').set(users);
-  } catch(e){}
+    await oak.saveUsers(users);
+  } catch(e){ console.warn('Could not save users:', e); }
+}
+
+// Resolves on the first users snapshot so load()/checkLogin() see live data.
+function startSharedUsersSync(){
+  return new Promise((resolve) => {
+    if(!oak){ resolve(); return; }
+    let first = true;
+    oak.startUsersSync((list) => {
+      users = Array.isArray(list) ? list : [];
+      saveUsersLocal();
+      renderUserBadge();
+      applyPermissionsToUi();
+      render();
+      if(first){ first = false; resolve(); }
+    });
+  });
 }
 
 // Appends a new Unfinished item to the dispatch board. Reads from the
@@ -1152,16 +1163,14 @@ async function load(){
   checkForRecoverableData();
 
   // Firebase is baked into this file (see <head>) so every device
-  // connects automatically to both the stock list's own live data AND
-  // the dispatch app's shared board — no API key/Bin ID to enter, no
-  // "Sync across devices" or "Link to dispatch app" setup screens
-  // needed anymore. Both listeners resolve their promise on the first
-  // snapshot (even if empty), so by the time checkLogin() runs, users[]
-  // is always genuinely live rather than a possibly-stale local cache.
+  // connects automatically. Stock data + dispatchBoard items stay on
+  // direct listeners; shared users[] comes via OakCore. All three
+  // resolve on first snapshot so checkLogin() sees live users.
   setSyncStatus('Connecting…');
   await Promise.all([
     initFirebaseStockSync(),
-    initFirebaseDispatchLink()
+    initFirebaseDispatchLink(),
+    startSharedUsersSync()
   ]);
 
   await checkLogin();
@@ -2400,7 +2409,7 @@ function showLoginScreen(){
 
   layer.innerHTML = `<div class="modal">
     <h3>Who's this?</h3>
-    <p class="modal-desc">Pick your name to continue.</p>
+    <p class="modal-desc">Pick your name to continue.${window.OakCore && OakCore.VERSION ? (" · oak-core " + OakCore.VERSION) : ""}</p>
     ${appUsers.map(u => `<button class="user-pick-btn" onclick="promptPin('${u.id}')">${escapeHtml(u.username)}${u.isRoot ? ' (root)' : ''}</button>`).join('')}
   </div>`;
 }
