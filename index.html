@@ -141,6 +141,12 @@
     color:var(--ink);
   }
   .checkbox-field input[type=checkbox]{width:15px;height:15px;}
+  .keep-badge{
+    display:inline-block;margin-left:6px;padding:1px 6px;border-radius:999px;
+    font-size:10px;font-weight:600;letter-spacing:.02em;
+    background:#e8f0e4;color:#2f5d28;border:1px solid #b7d0b0;
+    vertical-align:middle;
+  }
 
   .stepper{
     display:flex;
@@ -462,6 +468,9 @@
       </div>
       <div class="field full checkbox-field">
         <label><input type="checkbox" id="in-handed"> Split quantity by Right / Left handed</label>
+      </div>
+      <div class="field full checkbox-field">
+        <label><input type="checkbox" id="in-keep-on-list"> Keep on list when empty (after send to dispatch)</label>
       </div>
       <div class="field" id="qty-single-field">
         <label for="in-qty">Qty</label>
@@ -1392,6 +1401,13 @@ function render(){
       descEl.title = 'Click to edit';
       descEl.onclick = () => startEdit(it.id);
       main.appendChild(descEl);
+      if(it.keepOnList){
+        const keepBadge = document.createElement('span');
+        keepBadge.className = 'keep-badge';
+        keepBadge.textContent = 'keep on list';
+        keepBadge.title = 'Stays on the stock list even when qty is 0';
+        main.appendChild(keepBadge);
+      }
       if(it.material){
         const materialEl = document.createElement('div');
         materialEl.className = 'item-material';
@@ -1524,6 +1540,7 @@ function startEdit(id){
   document.getElementById('in-qty-r').value = handed ? it.qty : '';
   document.getElementById('in-qty-l').value = handed ? it.qtyL : '';
   document.getElementById('in-notes').value = it.notes;
+  document.getElementById('in-keep-on-list').checked = !!it.keepOnList;
   document.getElementById('add-btn').textContent = 'Save changes';
   document.getElementById('in-desc').focus();
   window.scrollTo({top:0, behavior:'smooth'});
@@ -1614,6 +1631,32 @@ async function copyCategory(oldName){
 // request ("i want it to ask howmanny units i want to send to
 // dispatch and acording to the recipy only remove those cuntitys off
 // the stock list"). Needs a recipe to know what/how much to deduct.
+
+// After send-to-dispatch depletes stock, unmarked empty lines are
+// removed from the list. Items with keepOnList stay (even at qty 0)
+// so a blank cutting template can remain for the next run — per Sean
+// ("add to list" / keep-on-list marker: ONLY marked items stay when
+// nothing is left).
+function itemTotalQty(it){
+  const q = Number(it.qty) || 0;
+  const hasL = it.qtyL !== null && it.qtyL !== undefined;
+  return q + (hasL ? (Number(it.qtyL) || 0) : 0);
+}
+function itemIsEmpty(it){
+  return itemTotalQty(it) <= 0;
+}
+function clearEmptyUnkeptItems(idSet){
+  // idSet: optional Set of item ids to consider; omit to scan all.
+  const before = items.length;
+  items = items.filter(it => {
+    if(idSet && !idSet.has(it.id)) return true;
+    if(!itemIsEmpty(it)) return true;
+    if(it.keepOnList) return true;
+    return false;
+  });
+  return before - items.length;
+}
+
 async function buildCategory(catName){
   if(!can('markBuilt')) return;
   const groupKey = (it) => (it.cat && it.cat.trim()) ? it.cat.trim() : 'Uncategorised';
@@ -1676,7 +1719,17 @@ async function buildCategory(catName){
       const ql = Number(it.qtyL) || 0;
       deductQtyL = Math.min(ql, remaining);
     }
-    return { itemId: it.id, desc: it.desc, deductQty, deductQtyL };
+    return {
+      itemId: it.id,
+      desc: it.desc,
+      cat: (it.cat && it.cat.trim()) ? it.cat.trim() : 'Uncategorised',
+      size: it.size || '',
+      material: it.material || '',
+      notes: it.notes || '',
+      handed: it.qtyL !== null && it.qtyL !== undefined,
+      keepOnList: !!it.keepOnList,
+      deductQty, deductQtyL
+    };
   });
 
   try{
@@ -1692,6 +1745,11 @@ async function buildCategory(catName){
       it.qty = (Number(it.qty) || 0) - d.deductQty;
       if(it.qtyL !== null && it.qtyL !== undefined) it.qtyL = (Number(it.qtyL) || 0) - d.deductQtyL;
     });
+    // Clear empty unmarked lines for this job so a fully-sent assembly
+    // (e.g. Assembly #15) disappears from the stock list unless the
+    // keep-on-list marker is set on leftover/zero lines.
+    const catIds = new Set(items.filter(it => groupKey(it) === catName).map(it => it.id));
+    clearEmptyUnkeptItems(catIds);
     logActivity('buildJob', { cat: catName, units });
     await save();
     render();
@@ -1845,13 +1903,29 @@ async function returnBuildToStock(dispatchItemId){
 
   const missing = [];
   entry.recipeSnapshot.forEach(d => {
-    const it = items.find(i => i.id === d.itemId);
+    let it = items.find(i => i.id === d.itemId);
     if(!it){
-      if(d.deductQty || d.deductQtyL) missing.push(d.desc || d.itemId);
-      return;
+      // Cleared after send (empty + not keep-on-list). Recreate from
+      // the snapshot so Return to stock can restore quantities.
+      if(!(d.deductQty || d.deductQtyL)) return;
+      it = {
+        id: d.itemId,
+        cat: d.cat || entry.sourceCat || entry.type || 'Uncategorised',
+        desc: d.desc || '(restored item)',
+        size: d.size || '',
+        material: d.material || '',
+        notes: d.notes || '',
+        qty: 0,
+        qtyL: d.handed ? 0 : null,
+        keepOnList: !!d.keepOnList
+      };
+      items.push(it);
     }
     it.qty = (Number(it.qty) || 0) + (d.deductQty || 0);
-    if(d.deductQtyL) it.qtyL = (Number(it.qtyL) || 0) + d.deductQtyL;
+    if(d.deductQtyL){
+      if(it.qtyL === null || it.qtyL === undefined) it.qtyL = 0;
+      it.qtyL = (Number(it.qtyL) || 0) + d.deductQtyL;
+    }
   });
 
   try{
@@ -2065,6 +2139,7 @@ async function handleAdd(){
   const material = document.getElementById('in-material').value.trim();
   const notes = document.getElementById('in-notes').value.trim();
   const handed = document.getElementById('in-handed').checked;
+  const keepOnList = document.getElementById('in-keep-on-list').checked;
   const errorEl = document.getElementById('error-msg');
 
   let qty, qtyL;
@@ -2086,12 +2161,12 @@ async function handleAdd(){
   if(editingId){
     const it = items.find(i=>i.id===editingId);
     if(it){
-      it.cat = cat; it.desc = desc; it.size = size; it.material = material; it.qty = qty; it.qtyL = qtyL; it.notes = notes;
+      it.cat = cat; it.desc = desc; it.size = size; it.material = material; it.qty = qty; it.qtyL = qtyL; it.notes = notes; it.keepOnList = keepOnList;
     }
     editingId = null;
     document.getElementById('add-btn').textContent = 'Add to stock list';
   } else {
-    items.push({id: uid(), cat, desc, size, material, qty, qtyL, notes});
+    items.push({id: uid(), cat, desc, size, material, qty, qtyL, notes, keepOnList});
   }
 
   document.getElementById('in-cat').value = '';
@@ -2105,6 +2180,7 @@ async function handleAdd(){
   document.getElementById('in-qty-l').value = '';
   document.getElementById('in-notes').value = '';
   document.getElementById('in-handed').checked = false;
+  document.getElementById('in-keep-on-list').checked = false;
   document.getElementById('qty-single-field').style.display = 'flex';
   document.getElementById('qty-r-field').style.display = 'none';
   document.getElementById('qty-l-field').style.display = 'none';
@@ -2166,11 +2242,18 @@ async function confirmMarkBuilt(){
       recipeSnapshot: [{
         itemId: it.id,
         desc: it.desc,
+        cat: (it.cat && it.cat.trim()) ? it.cat.trim() : 'Uncategorised',
+        size: it.size || '',
+        material: it.material || '',
+        notes: it.notes || '',
+        handed: it.qtyL !== null && it.qtyL !== undefined,
+        keepOnList: !!it.keepOnList,
         deductQty: side === 'L' ? 0 : qty,
         deductQtyL: side === 'L' ? qty : 0
       }]
     });
     it[field] = available - qty;
+    clearEmptyUnkeptItems(new Set([it.id]));
     logActivity('sendToDispatch', {
       cat: (it.cat && it.cat.trim()) ? it.cat.trim() : 'Uncategorised',
       desc: label, qty
