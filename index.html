@@ -803,7 +803,7 @@ function initFirebaseStockSync(){
       const remote = snapshot.val();
       if(remote){
         items = Array.isArray(remote.items) ? remote.items : items;
-        recipes = (remote.recipes && typeof remote.recipes === 'object') ? remote.recipes : recipes;
+        recipes = (remote.recipes && typeof remote.recipes === 'object') ? decodeRecipeKeys(remote.recipes) : recipes;
         activityLog = Array.isArray(remote.activityLog) ? remote.activityLog : activityLog;
         try{
           localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
@@ -826,9 +826,45 @@ function initFirebaseStockSync(){
   });
 }
 
+// Firebase refuses to store anything under a name containing . # $ [ ] /
+// (e.g. a recipe for "Assembly #15 (...)"), and before this fix that
+// made the WHOLE save fail silently — the recipe (and every other change
+// made in that session) never reached the database, and the next live
+// update from Firebase wiped it off screen. Recipe names are now encoded
+// on the way in (# -> %23 etc.) and decoded on the way out, so any job
+// name works, and a failed save now shows a clear warning instead of
+// failing silently.
+const FIREBASE_KEY_ESCAPES = { '%': '%25', '.': '%2E', '#': '%23', '$': '%24', '[': '%5B', ']': '%5D', '/': '%2F' };
+function encodeFirebaseKey(k){
+  return String(k).replace(/[%.#$\[\]\/]/g, ch => FIREBASE_KEY_ESCAPES[ch]);
+}
+function decodeFirebaseKey(k){
+  return String(k).replace(/%(25|2E|23|24|5B|5D|2F)/gi, (m, hex) => String.fromCharCode(parseInt(hex, 16)));
+}
+function encodeRecipeKeys(obj){
+  const out = {};
+  Object.keys(obj || {}).forEach(k => { out[encodeFirebaseKey(k)] = obj[k]; });
+  return out;
+}
+function decodeRecipeKeys(obj){
+  const out = {};
+  Object.keys(obj || {}).forEach(k => { out[decodeFirebaseKey(k)] = obj[k]; });
+  return out;
+}
+function reportStockSaveFailure(err){
+  console.error('Stock List save to Firebase failed', err);
+  setSyncStatus('NOT SAVED — check connection', true);
+  alert('Your last change could not be saved to the shared database, so it may disappear.\n\n' + ((err && err.message) || err || 'Unknown error'));
+}
 function pushStockToFirebase(){
   if(!firebaseStockRef) return;
-  firebaseStockRef.set({ items, recipes, activityLog }).catch(() => {});
+  try{
+    firebaseStockRef.set({ items, recipes: encodeRecipeKeys(recipes), activityLog })
+      .then(() => setSyncStatus(firebaseConnected ? 'Synced (live)' : 'Reconnecting…', !firebaseConnected))
+      .catch(reportStockSaveFailure);
+  } catch(e){
+    reportStockSaveFailure(e);
+  }
 }
 
 // Debounces rapid-fire saves into one write ~800ms after the last
