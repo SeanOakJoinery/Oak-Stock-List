@@ -495,6 +495,7 @@
     <button class="ghost-btn" id="share-pdf-btn">Share PDF</button>
     <button class="ghost-btn" id="install-btn" style="display:none;">Install app</button>
     <button class="ghost-btn" id="order-list-btn" style="display:none;">Order list</button>
+    <button class="ghost-btn" id="stock-count-btn" style="display:none;">Stock count</button>
     <button class="ghost-btn" id="import-cutting-list-btn" style="display:none;">Import cutting list</button>
     <input type="file" id="import-cutting-list-file" accept=".xlsx,.xls,.csv" style="display:none;">
     <button class="ghost-btn" id="returns-btn" style="display:none;">Sent to dispatch</button>
@@ -548,6 +549,7 @@
 <div id="recipeModalLayer"></div>
 <div id="returnsModalLayer"></div>
 <div id="activityLogModalLayer"></div>
+<div id="stockCountModalLayer"></div>
 
 <script>
 const STORAGE_KEY = 'stock-items-v2';
@@ -1873,10 +1875,129 @@ function activityLineText(entry){
       return `built ${d.units} × "${d.cat}" and sent to dispatch`;
     case 'returnFromDispatch':
       return `returned ${d.units || ''} × "${d.cat}" from dispatch back to stock`;
+    case 'stockCount':
+      return `stock count: ${d.desc || '(item)'}${d.size ? ' — ' + d.size : ''} in "${d.cat || 'Uncategorised'}" ${d.before}${d.beforeL !== undefined && d.beforeL !== null ? ' / ' + d.beforeL : ''} → ${d.after}${d.afterL !== undefined && d.afterL !== null ? ' / ' + d.afterL : ''}`;
     default:
       return entry.action;
   }
 }
+
+
+/* ---------- Stock count (2026-09-24) ----------
+   Count cut parts / finished items job by job: type what is physically
+   there (right + left for split items), see the difference, and apply in
+   one go. Each correction is logged in the Activity log ("stock count"),
+   with who and before/after. Typed figures stay on this device until
+   applied, so a count can be picked up later. */
+const SL_COUNT_KEY = 'slCountDraft';
+let stockCountCat = '__all';
+let stockCountSearch = '';
+function loadSlDraft(){ try{ return JSON.parse(localStorage.getItem(SL_COUNT_KEY) || '{}'); }catch(e){ return {}; } }
+function saveSlDraft(d){ try{ localStorage.setItem(SL_COUNT_KEY, JSON.stringify(d)); }catch(e){} }
+function isSplitItem(it){ return it.qtyL !== null && it.qtyL !== undefined; }
+function slDiffText(it, d){
+  if(!d) return '—';
+  const parts = [];
+  if(d.n !== undefined){ const x = d.n - (Number(it.qty) || 0); parts.push((isSplitItem(it) ? 'R ' : '') + (x > 0 ? '+' : '') + x); }
+  if(d.l !== undefined && isSplitItem(it)){ const x = d.l - (Number(it.qtyL) || 0); parts.push('L ' + (x > 0 ? '+' : '') + x); }
+  return parts.join(' · ') || '—';
+}
+function slDraftHasChange(it, d){
+  return !!d && ((d.n !== undefined && d.n !== (Number(it.qty) || 0)) || (d.l !== undefined && isSplitItem(it) && d.l !== (Number(it.qtyL) || 0)));
+}
+function openStockCountModal(){
+  if(!(can('stockAddQty') && can('stockRemoveQty'))) return;
+  const layer = document.getElementById('stockCountModalLayer');
+  const draft = loadSlDraft();
+  const cats = [...new Set(items.map(i => (i.cat && i.cat.trim()) || 'Uncategorised'))].sort((a, b) => naturalCompare(a, b));
+  const q = stockCountSearch.trim().toLowerCase();
+  const list = items
+    .filter(i => stockCountCat === '__all' || ((i.cat && i.cat.trim()) || 'Uncategorised') === stockCountCat)
+    .filter(i => !q || `${i.cat} ${i.desc} ${i.size || ''} ${i.material || ''}`.toLowerCase().includes(q))
+    .sort((a, b) => naturalCompare(`${a.cat} ${a.desc} ${a.size}`, `${b.cat} ${b.desc} ${b.size}`));
+  let lastCat = null;
+  const rows = list.map(it => {
+    const d = draft[it.id] || {};
+    const cat = (it.cat && it.cat.trim()) || 'Uncategorised';
+    const head = cat !== lastCat ? `<tr><td colspan="4" style="font-weight:700;padding-top:10px;">${escapeHtml(cat)}</td></tr>` : '';
+    lastCat = cat;
+    const sys = isSplitItem(it) ? `R ${it.qty || 0} / L ${it.qtyL || 0}` : `${it.qty || 0}`;
+    return head + `<tr>
+      <td>${escapeHtml(it.desc)}${it.size ? ` <span style="color:var(--ink-soft)">${escapeHtml(it.size)}</span>` : ''}</td>
+      <td>${sys}</td>
+      <td><input type="number" min="0" step="1" style="width:70px" placeholder="${isSplitItem(it) ? 'R' : ''}" value="${d.n !== undefined ? d.n : ''}" oninput="slCountInput('${it.id}')" id="slc-n-${it.id}">
+        ${isSplitItem(it) ? `<input type="number" min="0" step="1" style="width:70px" placeholder="L" value="${d.l !== undefined ? d.l : ''}" oninput="slCountInput('${it.id}')" id="slc-l-${it.id}">` : ''}</td>
+      <td id="slc-d-${it.id}">${escapeHtml(slDiffText(it, draft[it.id]))}</td>
+    </tr>`;
+  }).join('');
+  layer.innerHTML = `<div class="modal-overlay" id="stockCountOverlay">
+    <div class="modal" style="max-width:640px;">
+      <h3>Stock count</h3>
+      <p class="modal-desc">Count what is physically there and type it in (right and left for split items). Leave blank anything you didn't count. Nothing changes until you press <b>Apply count</b>.</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+        <select onchange="stockCountCat=this.value; openStockCountModal();"><option value="__all">All jobs</option>${cats.map(c => `<option value="${escapeHtml(c)}" ${c === stockCountCat ? 'selected' : ''}>${escapeHtml(c)}</option>`).join('')}</select>
+        <input type="text" placeholder="Find…" value="${escapeHtml(stockCountSearch)}" onchange="stockCountSearch=this.value; openStockCountModal();" style="flex:1;min-width:140px;">
+      </div>
+      <div style="max-height:55vh;overflow-y:auto;">
+        <table style="width:100%;font-size:13px;"><thead><tr><th style="text-align:left">Item</th><th style="text-align:left">System</th><th style="text-align:left">Counted</th><th style="text-align:left">Difference</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="4">No items.</td></tr>'}</tbody></table>
+      </div>
+      <p class="modal-desc" id="slc-summary" style="margin-top:8px;"></p>
+      <div class="modal-actions">
+        <button class="modal-close" onclick="closeStockCountModal()">Close</button>
+        <button onclick="if(confirm('Clear all typed counts?')){ saveSlDraft({}); openStockCountModal(); }">Clear</button>
+        <button class="primary" id="slc-apply" onclick="applySlCount()">Apply count</button>
+      </div>
+    </div>
+  </div>`;
+  slCountSummary();
+}
+function slCountSummary(){
+  const draft = loadSlDraft();
+  const ids = Object.keys(draft).filter(id => items.some(i => i.id === id));
+  const changes = ids.filter(id => slDraftHasChange(items.find(i => i.id === id), draft[id])).length;
+  const el = document.getElementById('slc-summary');
+  if(el) el.textContent = ids.length ? `${ids.length} item(s) counted · ${changes} with a difference` : 'Nothing counted yet.';
+  const btn = document.getElementById('slc-apply');
+  if(btn) btn.disabled = !ids.length;
+}
+function slCountInput(id){
+  const draft = loadSlDraft();
+  const n = document.getElementById('slc-n-' + id);
+  const l = document.getElementById('slc-l-' + id);
+  const e = {};
+  if(n && n.value !== '') e.n = Math.max(0, parseInt(n.value, 10) || 0);
+  if(l && l.value !== '') e.l = Math.max(0, parseInt(l.value, 10) || 0);
+  if(Object.keys(e).length) draft[id] = e; else delete draft[id];
+  saveSlDraft(draft);
+  const it = items.find(i => i.id === id);
+  const cell = document.getElementById('slc-d-' + id);
+  if(cell && it) cell.textContent = slDiffText(it, draft[id]);
+  slCountSummary();
+}
+async function applySlCount(){
+  const draft = loadSlDraft();
+  const ids = Object.keys(draft).filter(id => items.some(i => i.id === id));
+  if(!ids.length) return;
+  if(!confirm(`Apply the count for ${ids.length} item(s)? Anything different will be set to the counted figure.`)) return;
+  let changed = 0;
+  ids.forEach(id => {
+    const it = items.find(i => i.id === id);
+    const d = draft[id];
+    if(!slDraftHasChange(it, d)) return;
+    const before = Number(it.qty) || 0, beforeL = isSplitItem(it) ? (Number(it.qtyL) || 0) : null;
+    if(d.n !== undefined) it.qty = d.n;
+    if(d.l !== undefined && isSplitItem(it)) it.qtyL = d.l;
+    logActivity('stockCount', { cat: (it.cat && it.cat.trim()) || 'Uncategorised', desc: it.desc, size: it.size || '', before, after: Number(it.qty) || 0, beforeL, afterL: isSplitItem(it) ? (Number(it.qtyL) || 0) : null });
+    changed++;
+  });
+  saveSlDraft({});
+  await save();
+  render();
+  openStockCountModal();
+  alert(changed ? `Count applied — ${changed} item(s) corrected.` : 'Count applied — everything matched.');
+}
+function closeStockCountModal(){ document.getElementById('stockCountModalLayer').innerHTML = ''; }
 
 function closeActivityLogModal(){
   document.getElementById('activityLogModalLayer').innerHTML = '';
@@ -2098,6 +2219,7 @@ document.getElementById('import-cutting-list-file').addEventListener('change', (
 });
 document.getElementById('returns-btn').addEventListener('click', openReturnsModal);
 document.getElementById('activity-log-btn').addEventListener('click', openActivityLogModal);
+document.getElementById('stock-count-btn').addEventListener('click', () => openStockCountModal());
 
 function buildStockPdfBlob(){
   const { jsPDF } = window.jspdf;
@@ -2392,6 +2514,7 @@ function applyPermissionsToUi(){
   set('import-cutting-list-btn', currentUserIsRoot());
   set('returns-btn', can('markBuilt'));
   set('activity-log-btn', currentUserIsRoot());
+  set('stock-count-btn', can('stockAddQty') && can('stockRemoveQty'));
   // sync-settings-btn/dispatch-link-btn removed 2026-09-09 — nothing
   // left to configure for either since the Firebase migration; sync
   // status is now a plain read-only indicator (sync-status span),
