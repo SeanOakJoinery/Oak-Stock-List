@@ -1,4 +1,4 @@
-const CACHE_NAME = 'oak-stock-shell-v3';
+const CACHE_NAME = 'oak-stock-shell-v4';
 const SHELL_FILES = [
   './',
   './index.html',

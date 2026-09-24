@@ -1253,12 +1253,15 @@ function render(){
   const root = document.getElementById('list-root');
   const searchVal = document.getElementById('search').value.trim().toLowerCase();
 
-  const filtered = items.filter(it => {
+  // Hidden-after-dispatch rows stay in `items` (and Firebase) but are
+  // omitted from the normal list until qty returns or keepOnList applies.
+  const visibleItems = items.filter(it => !itemIsHidden(it));
+  const filtered = visibleItems.filter(it => {
     if(!searchVal) return true;
     return (it.desc + ' ' + it.cat + ' ' + it.size + ' ' + it.notes + ' ' + (it.material||'')).toLowerCase().includes(searchVal);
   });
 
-  document.getElementById('count-pill').textContent = items.length + ' item' + (items.length===1?'':'s');
+  document.getElementById('count-pill').textContent = visibleItems.length + ' item' + (visibleItems.length===1?'':'s');
 
   const cats = document.getElementById('cat-list');
   cats.innerHTML = '';
@@ -1290,7 +1293,7 @@ function render(){
   });
 
   if(filtered.length === 0){
-    root.innerHTML = '<div class="empty">' + (items.length===0 ? 'No items yet. Add your first one above.' : 'No items match your search.') + '</div>';
+    root.innerHTML = '<div class="empty">' + (visibleItems.length===0 ? 'No items yet. Add your first one above.' : 'No items match your search.') + '</div>';
     return;
   }
 
@@ -1511,6 +1514,7 @@ async function adjustQty(id, field, delta){
   if(!it) return;
   const current = Number(it[field]) || 0;
   it[field] = Math.max(0, current + delta);
+  unhideIfStocked(it);
   await save();
   render();
 }
@@ -1584,11 +1588,13 @@ async function copyCategory(oldName){
   // components by item id) can be copied across too, per user request
   // ("when i copy the job the recipy has to copy as well").
   const oldToNewId = {};
-  const toCopy = items.filter(it => groupKey(it) === oldName);
+  const toCopy = items.filter(it => groupKey(it) === oldName && !itemIsHidden(it));
   toCopy.forEach(it => {
     const newId = uid();
     oldToNewId[it.id] = newId;
-    items.push({...it, id: newId, cat: trimmed});
+    const copy = {...it, id: newId, cat: trimmed};
+    delete copy.hiddenAfterDispatch;
+    items.push(copy);
   });
 
   const oldRecipe = recipes[oldName];
@@ -1633,10 +1639,10 @@ async function copyCategory(oldName){
 // the stock list"). Needs a recipe to know what/how much to deduct.
 
 // After send-to-dispatch depletes stock, unmarked empty lines are
-// removed from the list. Items with keepOnList stay (even at qty 0)
-// so a blank cutting template can remain for the next run — per Sean
-// ("add to list" / keep-on-list marker: ONLY marked items stay when
-// nothing is left).
+// HIDDEN (not deleted) so Return to stock still has rows to write
+// qty back onto. Field: hiddenAfterDispatch (boolean).
+// Items with keepOnList stay visible at qty 0 (blank cutting template).
+// Manual add / stepper / return that puts qty above 0 auto-unhides.
 function itemTotalQty(it){
   const q = Number(it.qty) || 0;
   const hasL = it.qtyL !== null && it.qtyL !== undefined;
@@ -1645,22 +1651,33 @@ function itemTotalQty(it){
 function itemIsEmpty(it){
   return itemTotalQty(it) <= 0;
 }
-function clearEmptyUnkeptItems(idSet){
+function itemIsHidden(it){
+  return !!it.hiddenAfterDispatch;
+}
+function unhideIfStocked(it){
+  if(!it) return;
+  if(!itemIsEmpty(it) && it.hiddenAfterDispatch) it.hiddenAfterDispatch = false;
+}
+function hideEmptyUnkeptItems(idSet){
+  // Soft-hide empty unmarked lines. Never deletes records.
   // idSet: optional Set of item ids to consider; omit to scan all.
-  const before = items.length;
-  items = items.filter(it => {
-    if(idSet && !idSet.has(it.id)) return true;
-    if(!itemIsEmpty(it)) return true;
-    if(it.keepOnList) return true;
-    return false;
+  let n = 0;
+  items.forEach(it => {
+    if(idSet && !idSet.has(it.id)) return;
+    if(!itemIsEmpty(it)) return;
+    if(it.keepOnList) return; // keepOnList never hidden by this path
+    if(!it.hiddenAfterDispatch){
+      it.hiddenAfterDispatch = true;
+      n++;
+    }
   });
-  return before - items.length;
+  return n;
 }
 
 async function buildCategory(catName){
   if(!can('markBuilt')) return;
   const groupKey = (it) => (it.cat && it.cat.trim()) ? it.cat.trim() : 'Uncategorised';
-  const catItems = items.filter(it => groupKey(it) === catName);
+  const catItems = items.filter(it => groupKey(it) === catName && !itemIsHidden(it));
   if(catItems.length === 0) return;
 
   const recipe = recipes[catName];
@@ -1745,11 +1762,11 @@ async function buildCategory(catName){
       it.qty = (Number(it.qty) || 0) - d.deductQty;
       if(it.qtyL !== null && it.qtyL !== undefined) it.qtyL = (Number(it.qtyL) || 0) - d.deductQtyL;
     });
-    // Clear empty unmarked lines for this job so a fully-sent assembly
-    // (e.g. Assembly #15) disappears from the stock list unless the
-    // keep-on-list marker is set on leftover/zero lines.
+    // Hide (do not delete) empty unmarked lines for this job so a
+    // fully-sent assembly disappears from the normal list UI, but
+    // Return to stock can still unhide and restore qty onto the same rows.
     const catIds = new Set(items.filter(it => groupKey(it) === catName).map(it => it.id));
-    clearEmptyUnkeptItems(catIds);
+    hideEmptyUnkeptItems(catIds);
     logActivity('buildJob', { cat: catName, units });
     await save();
     render();
@@ -1905,9 +1922,13 @@ async function returnBuildToStock(dispatchItemId){
   entry.recipeSnapshot.forEach(d => {
     let it = items.find(i => i.id === d.itemId);
     if(!it){
-      // Cleared after send (empty + not keep-on-list). Recreate from
-      // the snapshot so Return to stock can restore quantities.
-      if(!(d.deductQty || d.deductQtyL)) return;
+      // Legacy only: rows hard-deleted by the old clearEmptyUnkeptItems
+      // path (pre hide-instead-of-delete). Recreate from snapshot so
+      // Return to stock can still restore quantities.
+      if(!(d.deductQty || d.deductQtyL)){
+        missing.push(d.desc || d.itemId);
+        return;
+      }
       it = {
         id: d.itemId,
         cat: d.cat || entry.sourceCat || entry.type || 'Uncategorised',
@@ -1917,7 +1938,8 @@ async function returnBuildToStock(dispatchItemId){
         notes: d.notes || '',
         qty: 0,
         qtyL: d.handed ? 0 : null,
-        keepOnList: !!d.keepOnList
+        keepOnList: !!d.keepOnList,
+        hiddenAfterDispatch: false
       };
       items.push(it);
     }
@@ -1926,6 +1948,8 @@ async function returnBuildToStock(dispatchItemId){
       if(it.qtyL === null || it.qtyL === undefined) it.qtyL = 0;
       it.qtyL = (Number(it.qtyL) || 0) + d.deductQtyL;
     }
+    // Always unhide on return — qty is being written back onto this row.
+    it.hiddenAfterDispatch = false;
   });
 
   try{
@@ -1992,9 +2016,10 @@ function openStockCountModal(){
   if(!(can('stockAddQty') && can('stockRemoveQty'))) return;
   const layer = document.getElementById('stockCountModalLayer');
   const draft = loadSlDraft();
-  const cats = [...new Set(items.map(i => (i.cat && i.cat.trim()) || 'Uncategorised'))].sort((a, b) => naturalCompare(a, b));
+  const cats = [...new Set(items.filter(i => !itemIsHidden(i)).map(i => (i.cat && i.cat.trim()) || 'Uncategorised'))].sort((a, b) => naturalCompare(a, b));
   const q = stockCountSearch.trim().toLowerCase();
   const list = items
+    .filter(i => !itemIsHidden(i))
     .filter(i => stockCountCat === '__all' || ((i.cat && i.cat.trim()) || 'Uncategorised') === stockCountCat)
     .filter(i => !q || `${i.cat} ${i.desc} ${i.size || ''} ${i.material || ''}`.toLowerCase().includes(q))
     .sort((a, b) => naturalCompare(`${a.cat} ${a.desc} ${a.size}`, `${b.cat} ${b.desc} ${b.size}`));
@@ -2071,6 +2096,7 @@ async function applySlCount(){
     const before = Number(it.qty) || 0, beforeL = isSplitItem(it) ? (Number(it.qtyL) || 0) : null;
     if(d.n !== undefined) it.qty = d.n;
     if(d.l !== undefined && isSplitItem(it)) it.qtyL = d.l;
+    unhideIfStocked(it);
     logActivity('stockCount', { cat: (it.cat && it.cat.trim()) || 'Uncategorised', desc: it.desc, size: it.size || '', before, after: Number(it.qty) || 0, beforeL, afterL: isSplitItem(it) ? (Number(it.qtyL) || 0) : null });
     changed++;
   });
@@ -2162,6 +2188,8 @@ async function handleAdd(){
     const it = items.find(i=>i.id===editingId);
     if(it){
       it.cat = cat; it.desc = desc; it.size = size; it.material = material; it.qty = qty; it.qtyL = qtyL; it.notes = notes; it.keepOnList = keepOnList;
+      if(keepOnList) it.hiddenAfterDispatch = false;
+      unhideIfStocked(it);
     }
     editingId = null;
     document.getElementById('add-btn').textContent = 'Add to stock list';
@@ -2253,7 +2281,7 @@ async function confirmMarkBuilt(){
       }]
     });
     it[field] = available - qty;
-    clearEmptyUnkeptItems(new Set([it.id]));
+    hideEmptyUnkeptItems(new Set([it.id]));
     logActivity('sendToDispatch', {
       cat: (it.cat && it.cat.trim()) ? it.cat.trim() : 'Uncategorised',
       desc: label, qty
@@ -2689,6 +2717,8 @@ function openRecipeEditor(catName){
   // The item dropdown on each row is left in place so it can still be
   // repointed at a different item if needed.
   const groupKey = (it) => (it.cat && it.cat.trim()) ? it.cat.trim() : 'Uncategorised';
+  // Include hiddenAfterDispatch rows so soft-hidden stock lines stay
+  // available when editing the recipe (records are never deleted).
   const itemsInCat = items
     .filter(it => groupKey(it) === catName)
     .sort((a, b) => naturalCompare((a.desc||'')+' '+(a.size||''), (b.desc||'')+' '+(b.size||'')));
