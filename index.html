@@ -1652,7 +1652,10 @@ function itemIsEmpty(it){
   return itemTotalQty(it) <= 0;
 }
 function itemIsHidden(it){
-  return !!it.hiddenAfterDispatch;
+  // Only hide while the line is actually empty. Stock written back from
+  // ANY app (e.g. Dispatch's own "Return to stock", which only adds qty)
+  // makes the line visible again even if the flag is still set.
+  return !!it.hiddenAfterDispatch && itemIsEmpty(it);
 }
 function unhideIfStocked(it){
   if(!it) return;
