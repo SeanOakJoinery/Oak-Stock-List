@@ -19,7 +19,7 @@
      bundler in this file, so no ES-module scoping headaches. -->
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-database-compat.js"></script>
-<script src="https://seanoakjoinery.github.io/oak-core/oak-core.js?v=1"></script>
+<script src="https://seanoakjoinery.github.io/oak-core/oak-core.js?v=2"></script>
 <script>
   const firebaseConfig = {
     apiKey: "AIzaSyCkoUkLIlxdxD2AAEpLGW4dzqkSeC5lVh0",
@@ -722,7 +722,7 @@ function currentUserIsRoot(){
 
 // --- PER-APP ACCESS / SHARED AUTH ------------------------------------
 // Oak Core cutover 2026-09-24: users sync/save + hashPin via
-// https://seanoakjoinery.github.io/oak-core/oak-core.js?v=1 — rollback
+// https://seanoakjoinery.github.io/oak-core/oak-core.js?v=2 — rollback
 // branch backup-before-oak-core-2026-09-24
 // users[] is shared with Dispatch / Board / Consumables via OakCore.
 // This app's OWN data (items/recipes/activityLog) stays at stockList.
