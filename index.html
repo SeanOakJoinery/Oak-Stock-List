@@ -19,7 +19,9 @@
      bundler in this file, so no ES-module scoping headaches. -->
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-database-compat.js"></script>
-<script src="https://seanoakjoinery.github.io/oak-core/oak-core.js?v=2"></script>
+<script src="https://seanoakjoinery.github.io/oak-core/oak-core.js?v=3"></script>
+<script>/* ONE LOGIN (oak-core v3): no session on this device -> log in on the Oak Joinery home app first. Add ?local=1 to the URL to use this app's own login screen instead. */
+(function(){try{var S=window.OakCore&&OakCore.session;if(S&&!S.get()&&!S.localLoginAllowed())S.goHome({next:'stock'});}catch(e){}})();</script>
 <script>
   const firebaseConfig = {
     apiKey: "AIzaSyCkoUkLIlxdxD2AAEpLGW4dzqkSeC5lVh0",
@@ -722,7 +724,7 @@ function currentUserIsRoot(){
 
 // --- PER-APP ACCESS / SHARED AUTH ------------------------------------
 // Oak Core cutover 2026-09-24: users sync/save + hashPin via
-// https://seanoakjoinery.github.io/oak-core/oak-core.js?v=2 — rollback
+// https://seanoakjoinery.github.io/oak-core/oak-core.js?v=3 — rollback
 // branch backup-before-oak-core-2026-09-24
 // users[] is shared with Dispatch / Board / Consumables via OakCore.
 // This app's OWN data (items/recipes/activityLog) stays at stockList.
@@ -2467,7 +2469,32 @@ if('serviceWorker' in navigator){
 // security boundary (same limitation as the dispatch app's version of
 // this — see its dev notes for the full caveat).
 
+
+// ===================== ONE LOGIN (oak-core v3) =====================
+// The Oak Joinery home app (/oak-core/) is the one login screen. This app
+// picks up who's logged in on this device; "Menu" goes back home.
+function ssoOn(){ return !!(window.OakCore && OakCore.session); }
+function ssoGoMenu(){ if(ssoOn()) OakCore.session.goHome(); }
+// Returns the logged-in user, or null (and heads home) if there isn't one.
+function ssoResolve(list){
+  if(!ssoOn()) return null;
+  const r = OakCore.session.resolve(list, APP_ID);
+  if(r.status === 'ok') return r.user;
+  if(r.status === 'wait' || OakCore.session.localLoginAllowed()) return null;
+  OakCore.session.goHome(r.status === 'denied' ? { denied: APP_ID } : { next: APP_ID });
+  return null;
+}
+
 async function checkLogin(){
+  const su = ssoResolve(users);
+  if(su){
+    currentUserId = su.id;
+    hideLoginOverlay();
+    resetIdleTimer();
+    renderUserBadge();
+    applyPermissionsToUi();
+    return;
+  }
   let savedId = null;
   try{ savedId = localStorage.getItem('currentUserId') || null; } catch(e){}
   if(savedId && users.some(u => u.id === savedId)){
@@ -2579,6 +2606,7 @@ async function attemptLogin(userId){
 
   delete loginAttempts[userId];
   currentUserId = u.id;
+  if(ssoOn()) OakCore.session.set(u);
   try{ localStorage.setItem('currentUserId', u.id); }catch(e){}
   hideLoginOverlay();
   renderUserBadge();
@@ -2611,6 +2639,7 @@ async function createRootAccount(){
 }
 
 async function logoutUser(){
+  if(ssoOn() && !OakCore.session.localLoginAllowed()){ OakCore.session.clear(); OakCore.session.goHome({ logout: 1 }); return; }
   currentUserId = null;
   clearTimeout(idleTimer);
   try{ localStorage.removeItem('currentUserId'); }catch(e){}
@@ -2623,7 +2652,7 @@ function renderUserBadge(){
   const el = document.getElementById('userBadge');
   if(!el) return;
   const u = getCurrentUser();
-  el.innerHTML = u ? `Logged in as <b>${escapeHtml(u.username)}</b>${u.isRoot ? ' (root)' : ''} · <button onclick="logoutUser()">Switch user</button>` : '';
+  el.innerHTML = u ? `Logged in as <b>${escapeHtml(u.username)}</b>${u.isRoot ? ' (root)' : ''} · <button onclick="ssoOn() ? ssoGoMenu() : logoutUser()">☰ Menu</button>` : '';
 }
 
 function applyPermissionsToUi(){
