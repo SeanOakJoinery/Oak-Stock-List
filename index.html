@@ -2671,7 +2671,7 @@ function applyPermissionsToUi(){
   // left to configure for either since the Firebase migration; sync
   // status is now a plain read-only indicator (sync-status span),
   // visible to everyone.
-  set('manage-users-btn', can('manageUsers'));
+  set('manage-users-btn', false); // 2026-09-30: users are managed only in the separate Users app
   const cu = getCurrentUser();
   set('order-list-btn', !!(cu && cu.isRoot));
   render();
